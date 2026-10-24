@@ -3,6 +3,25 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [1.0.5] — 2026-10-24
+
+### Fixed & Improved
+
+- **Oscillator Pitch Scaling & Ratio Calculation:**
+  - Corrected octave conversion formula in `osc_ratio` from `(tune + fine/100).exp2()` to `((tune + fine/100) / 12.0).exp2()`. Previously, integer semitones were passed directly to base-2 exponentiation, shifting frequencies by octaves instead of semitones and pushing oscillators above the filter cutoff.
+- **SysEx Preset Parser (`parse_syx_patch`) Calibration:**
+  - Fixed coarse tune byte centering for Oscillator 2 (`byte 75`) and Oscillator 3 (`byte 96`) to subtract 64.0 (bipolar center) instead of 60.0, resolving unwanted detuning offsets.
+  - Aligned Oscillator 1 fine tune mapping (`byte 54`), correctly anchoring Osc 1 at 0 cents.
+  - Added Delay Feedback ingestion (`byte 234`).
+  - Added full ingestion and bundling of `TnTSadtouch.syx` into `PEAK_DIST_03_SYX_ALL`.
+- **DAHDSR Envelope Scaling & Range:**
+  - Expanded envelope limits (`AmpAttack`, `AmpDecay`, `AmpRelease`, `FilterAttack`, etc.) up to 20–25 seconds matching the Novation Peak hardware specification.
+  - Calibrated non-linear envelope slider mapping curve ($t^{3.8}$ polynomial), accurately reproducing the 1.8-second swelling pad attack for `TnT Sadtouch` as heard in the reference video (`https://www.youtube.com/watch?v=WvYsF5q3KMQ`).
+- **Stereo Imaging & Panning Balance:**
+  - Fixed panning sum in voice mixing to `(1.0 - pan)`, restoring balanced left/right acoustic energy across stereo channels.
+- **Acoustic Fidelity Testing:**
+  - Added automated acoustic test `tnt_sadtouch_fidelity_analysis` testing harmonic spectrum, attack times, and stereo correlation.
+
 ## [1.0.4] — 2026-10-24
 
 ### Added & Improved

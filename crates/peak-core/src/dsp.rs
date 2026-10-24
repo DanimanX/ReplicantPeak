@@ -1037,9 +1037,9 @@ impl Engine {
                 patch.get(P::Osc3ShapeAmt),
             ],
             osc_ratio: [
-                (patch.get(P::Osc1Tune) + patch.get(P::Osc1Fine) / 100.0).exp2(),
-                (patch.get(P::Osc2Tune) + patch.get(P::Osc2Fine) / 100.0).exp2(),
-                (patch.get(P::Osc3Tune) + patch.get(P::Osc3Fine) / 100.0).exp2(),
+                ((patch.get(P::Osc1Tune) + patch.get(P::Osc1Fine) / 100.0) / 12.0).exp2(),
+                ((patch.get(P::Osc2Tune) + patch.get(P::Osc2Fine) / 100.0) / 12.0).exp2(),
+                ((patch.get(P::Osc3Tune) + patch.get(P::Osc3Fine) / 100.0) / 12.0).exp2(),
             ],
             noise: patch.get(P::NoiseLevel),
             ring: patch.get(P::RingLevel),
@@ -1332,7 +1332,7 @@ impl Engine {
                 let out = post_driven * amp;
                 // Peak pans alternate voices slightly for width.
                 let pan = if v.note % 2 == 0 { 0.47 } else { 0.53 };
-                mix_l += out * (1.4 - pan);
+                mix_l += out * (1.0 - pan);
                 mix_r += out * pan;
                 v.level = out;
             }
@@ -1529,9 +1529,11 @@ mod tests {
             engine.reset();
             let (name, patch) = crate::preset::parse_syx_patch(syx).expect("syx parse");
 
-            // Warm-up 2048 samples for attack and filter settle
-            let mut l_warm = vec![0.0; 2048];
-            let mut r_warm = vec![0.0; 2048];
+            // Warm-up to past attack time and let filter settle
+            let warm_len =
+                ((patch.get(P::AmpAttack) / 1000.0 * 48000.0) as usize).clamp(2048, 96000);
+            let mut l_warm = vec![0.0; warm_len];
+            let mut r_warm = vec![0.0; warm_len];
             engine.process(
                 &patch,
                 &[Event::NoteOn {
@@ -1816,5 +1818,57 @@ mod tests {
         // Two seconds of audio in well under two seconds: a comfortable margin
         // for debug builds on shared CI runners.
         assert!(elapsed < 1.5, "8 voices took {elapsed:.3}s for 2s of audio");
+    }
+
+    #[test]
+    fn tnt_sadtouch_fidelity_analysis() {
+        let mut engine = Engine::new(48_000.0);
+        let bank = crate::wavetable::Bank::generate(777);
+        engine.set_bank(bank);
+
+        let syx_bytes = include_bytes!("../../../PeakDist03/TnTSadtouch.syx");
+        let (name, patch) = crate::preset::parse_syx_patch(syx_bytes).expect("parse syx");
+        assert_eq!(name, "TnT Sadtouch");
+
+        let sample_rate = 48000;
+        let warm_len = (patch.get(P::AmpAttack) / 1000.0 * sample_rate as f32) as usize;
+        let mut l_warm = vec![0.0; warm_len];
+        let mut r_warm = vec![0.0; warm_len];
+
+        let events = [
+            Event::NoteOn {
+                note: 48,
+                velocity: 0.8,
+            },
+            Event::NoteOn {
+                note: 60,
+                velocity: 0.8,
+            },
+            Event::NoteOn {
+                note: 63,
+                velocity: 0.8,
+            },
+            Event::NoteOn {
+                note: 70,
+                velocity: 0.8,
+            },
+        ];
+        engine.process(&patch, &events, &mut l_warm, &mut r_warm);
+
+        let mut left = vec![0.0f32; 4096];
+        let mut right = vec![0.0f32; 4096];
+        engine.process(&patch, &[], &mut left, &mut right);
+
+        let l_rms = rms(&left);
+        let r_rms = rms(&right);
+        assert!(l_rms > 0.02 && r_rms > 0.02, "L: {l_rms}, R: {r_rms}");
+        assert!(
+            (l_rms - r_rms).abs() < 0.03,
+            "Imbalanced stereo: L {l_rms}, R {r_rms}"
+        );
+        for (&l, &r) in left.iter().zip(right.iter()) {
+            assert!(l.is_finite() && r.is_finite());
+            assert!(l.abs() <= 1.25 && r.abs() <= 1.25);
+        }
     }
 }

@@ -529,6 +529,7 @@ pub const TNT_DISTIL_LEAD_SYX: &[u8] = include_bytes!("../../../PeakDist03/TnTDi
 pub const TNT_DISTOPADKEY_SYX: &[u8] = include_bytes!("../../../PeakDist03/TnTDistopadkey.syx");
 pub const TNT_KEY_SYNTHT_SYX: &[u8] = include_bytes!("../../../PeakDist03/TnTKeySyntht.syx");
 pub const TNT_LEADER_X_SYX: &[u8] = include_bytes!("../../../PeakDist03/TnTLeaderX.syx");
+pub const TNT_SADTOUCH_SYX: &[u8] = include_bytes!("../../../PeakDist03/TnTSadtouch.syx");
 pub const TNT_SQRD_TOUCH_SYX: &[u8] = include_bytes!("../../../PeakDist03/TnTSqrdTouch.syx");
 pub const TNT_SQUARED_SYX: &[u8] = include_bytes!("../../../PeakDist03/TnTSquared.syx");
 pub const TNT_SYNC_PAD_KRUNCH_SYX: &[u8] =
@@ -542,6 +543,7 @@ pub const PEAK_DIST_03_SYX_ALL: &[&[u8]] = &[
     TNT_DISTOPADKEY_SYX,
     TNT_KEY_SYNTHT_SYX,
     TNT_LEADER_X_SYX,
+    TNT_SADTOUCH_SYX,
     TNT_SQRD_TOUCH_SYX,
     TNT_SQUARED_SYX,
     TNT_SYNC_PAD_KRUNCH_SYX,
@@ -588,6 +590,11 @@ pub fn parse_syx_patch(data: &[u8]) -> Result<(String, Patch), String> {
         min_val * (max_val / min_val).powf(t)
     };
 
+    let env_scale = |offset: usize, max_ms: f32| -> f32 {
+        let t = norm(offset);
+        1.0 + (max_ms - 1.0) * t.powf(3.8)
+    };
+
     let map_wave = |shape_byte: usize, type_byte: usize| -> f32 {
         let sh = get_u7(shape_byte) as usize;
         let tp = get_u7(type_byte) as usize;
@@ -605,13 +612,13 @@ pub fn parse_syx_patch(data: &[u8]) -> Result<(String, Patch), String> {
     patch.set(P::Osc1ShapeAmt, bipolar(51));
     let o1_tune = get_u7(53) - 60.0;
     patch.set(P::Osc1Tune, o1_tune.clamp(-24.0, 24.0));
-    let o1_fine = (get_u7(58) - 64.0) * (100.0 / 64.0);
+    let o1_fine = (get_u7(54) - 64.0) * (100.0 / 64.0);
     patch.set(P::Osc1Fine, o1_fine.clamp(-100.0, 100.0));
 
     // Osc 2
     patch.set(P::Osc2Shape, map_wave(70, 71));
     patch.set(P::Osc2ShapeAmt, bipolar(73));
-    let o2_tune = get_u7(75) - 60.0;
+    let o2_tune = get_u7(75) - 64.0;
     patch.set(P::Osc2Tune, o2_tune.clamp(-24.0, 24.0));
     let o2_fine = (get_u7(80) - 64.0) * (100.0 / 64.0);
     patch.set(P::Osc2Fine, o2_fine.clamp(-100.0, 100.0));
@@ -619,7 +626,7 @@ pub fn parse_syx_patch(data: &[u8]) -> Result<(String, Patch), String> {
     // Osc 3
     patch.set(P::Osc3Shape, map_wave(91, 92));
     patch.set(P::Osc3ShapeAmt, bipolar(94));
-    let o3_tune = get_u7(96) - 60.0;
+    let o3_tune = get_u7(96) - 64.0;
     patch.set(P::Osc3Tune, o3_tune.clamp(-24.0, 24.0));
     let o3_fine = (get_u7(101) - 64.0) * (100.0 / 64.0);
     patch.set(P::Osc3Fine, o3_fine.clamp(-100.0, 100.0));
@@ -655,16 +662,16 @@ pub fn parse_syx_patch(data: &[u8]) -> Result<(String, Patch), String> {
     patch.set(P::FilterType, ftype);
 
     // Amp Envelope
-    patch.set(P::AmpAttack, log_scale(169, 1.0, 10000.0));
-    patch.set(P::AmpDecay, log_scale(170, 1.0, 20000.0));
+    patch.set(P::AmpAttack, env_scale(169, 18000.0));
+    patch.set(P::AmpDecay, env_scale(170, 22000.0));
     patch.set(P::AmpSustain, norm(171));
-    patch.set(P::AmpRelease, log_scale(172, 1.0, 10000.0));
+    patch.set(P::AmpRelease, env_scale(172, 24000.0));
 
     // Filter Envelope
-    patch.set(P::FilterAttack, log_scale(177, 1.0, 10000.0));
-    patch.set(P::FilterDecay, log_scale(178, 1.0, 20000.0));
+    patch.set(P::FilterAttack, env_scale(177, 18000.0));
+    patch.set(P::FilterDecay, env_scale(178, 22000.0));
     patch.set(P::FilterSustain, norm(179));
-    patch.set(P::FilterRelease, log_scale(180, 1.0, 10000.0));
+    patch.set(P::FilterRelease, env_scale(180, 24000.0));
 
     // LFO 1
     patch.set(P::Lfo1Shape, (get_u7(185) % 5.0).floor());
@@ -683,6 +690,7 @@ pub fn parse_syx_patch(data: &[u8]) -> Result<(String, Patch), String> {
     patch.set(P::Chorus, norm(218));
     patch.set(P::DelayMix, norm(231));
     patch.set(P::DelayTime, log_scale(233, 1.0, 1400.0));
+    patch.set(P::DelayFeedback, norm(234).clamp(0.0, 0.95));
     patch.set(P::ReverbMix, norm(243));
     patch.set(P::ReverbSize, norm(247));
 
@@ -971,7 +979,7 @@ mod tests {
 
     #[test]
     fn syx_presets_parse_correctly() {
-        assert_eq!(PEAK_DIST_03_SYX_ALL.len(), 10);
+        assert_eq!(PEAK_DIST_03_SYX_ALL.len(), 11);
         for syx in PEAK_DIST_03_SYX_ALL {
             let res = parse_syx_patch(syx);
             assert!(res.is_ok(), "Failed to parse syx patch: {:?}", res.err());

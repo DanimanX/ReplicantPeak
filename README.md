@@ -14,7 +14,7 @@ ARM Cortex-M4 microcontroller code via an integrated Unicorn-based hardware
 emulator that drives the authentic 256×64 OLED display panel, voice activity LEDs,
 and parameter states.
 
-- **Status**: v1.0.4, Oxford oscillator & audio-rate OTA filter update.
+- **Status**: v1.0.5, Oxford oscillator & audio-rate OTA filter update.
 - **License**: MIT for the code. The firmware is not included and not covered by
   that license (see [Firmware](#firmware)).
 
