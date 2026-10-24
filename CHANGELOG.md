@@ -3,7 +3,30 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
-## [1.0.1] — 2026-10-23
+## [1.0.2] — 2026-10-24
+
+### Added
+
+- **ARM Cortex-M4 Microcontroller Emulator (`crates/peak-emulator`):**
+  - High-performance execution engine based on Unicorn (`unicorn-engine` v2.1) in ARM Thumb-2 mode.
+  - Novation SysEx 7-to-8 bit stream unpacker extracting the 249 KB binary payload from `.syx` firmware images.
+  - Full memory map: Flash (`0x08000000`), SRAM (`0x20000000`), Boot alias (`0x00000000`), and ARM Cortex-M bit-band regions (`0x42000000` / `0x22000000`).
+  - MMIO virtual peripheral stubs for STM32F4:
+    - RCC (Reset and Clock Control) with ready flags for HSE, PLL, and system clock switches.
+    - PWR (Power Control) with VOSRDY and BRR (Backup Regulator Ready) stubs.
+    - UART (USART6 / UART4) capturing serial logs and debug console output.
+    - GPIO (GPIOA-GPIOE) with pin input injection for buttons/switches and output pin state tracking for LEDs.
+    - SPI (SPI1-SPI4) stubs handling high-speed transfers to OLED and FPGA.
+    - SysTick timer and simulated timer ticks to advance firmware delay loops.
+  - CLI runner `emulate` with `--headless`, `--steps`, and `--trace` options.
+  - **Novation Peak Hardware LED & OLED GUI:**
+    - Live 256×64 monochrome OLED dot-matrix display rendering.
+    - 8 physical Voice Activity LEDs with glowing bezels and indicators.
+    - Hardware status LEDs (Animate 1/2, Arp, Filter 24dB).
+    - Virtual navigation buttons (`PAGE <`, `PAGE >`, `PATCH`, `EXIT`, `INIT`, `COMPARE`).
+    - CPU monitor, live register inspector, serial console terminal, and MMIO activity stream.
+- **Hardware 8-Voice LEDs in `peak-ui`:**
+  - Added the 8 discrete Voice LEDs with metallic bezels and cyan glow to the Voice section of the main front panel in `peak-ui` and `peak-panel`.
 
 ### Added
 

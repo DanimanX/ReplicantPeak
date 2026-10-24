@@ -1097,6 +1097,34 @@ fn voice_section(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut PanelState, 
         );
         param_knob(ui, host, state, r, *p, accent);
     }
+
+    // Hardware 8 Voice LEDs (matching Novation Peak front panel)
+    let leds_y = content.bottom() - 46.0;
+    let led_step = content.width() / 8.0;
+    let active_count = host.active_voices();
+    let painter = ui.painter();
+    for v in 0..8 {
+        let center = pos2(content.left() + (v as f32 + 0.5) * led_step, leds_y);
+        let is_lit = v < active_count;
+        // Outer metallic bezel
+        painter.circle_filled(center, 4.5_f32, PANEL_LO);
+        painter.circle_stroke(center, 4.5_f32, Stroke::new(1.0_f32, with_alpha(EDGE_HI, 0.8_f32)));
+        if is_lit {
+            painter.circle_filled(center, 6.5_f32, with_alpha(CYAN, 0.35_f32));
+            painter.circle_filled(center, 3.2_f32, CYAN);
+            painter.circle_filled(center, 1.2_f32, Color32::WHITE);
+        } else {
+            painter.circle_filled(center, 3.2_f32, Color32::from_rgb(10, 25, 30));
+        }
+        painter.text(
+            pos2(center.x, center.y + 6.0_f32),
+            Align2::CENTER_TOP,
+            format!("{}", v + 1),
+            FontId::monospace(7.0_f32),
+            if is_lit { CYAN } else { DIM },
+        );
+    }
+
     widgets::meter(
         ui.painter(),
         Rect::from_min_max(

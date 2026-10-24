@@ -5,11 +5,12 @@ members = [
     "crates/peak-ui",
     "crates/peak-plugin",
     "crates/peak-panel",
+    "crates/peak-emulator",
     "xtask",
 ]
 
 [workspace.package]
-version = "1.0.1"
+version = "1.0.2"
 edition = "2021"
 rust-version = "1.80"
 license = "MIT"

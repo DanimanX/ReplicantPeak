@@ -52,6 +52,9 @@ wavetables.
   allocation-free `process()`, firmware link persistence.
 - `crates/peak-panel` — binary that opens the same panel without an audio
   device. It renders `assets/panel.png`.
+- `crates/peak-emulator` — ARM Cortex-M4 microcontroller emulator (Unicorn engine)
+  with STM32F4 MMIO peripheral stubs (RCC, PWR, GPIO, UART, SPI, SysTick) and an
+  interactive Novation Peak OLED display & 8-Voice LED hardware panel GUI.
 - `xtask` — plugin bundling (`cargo xtask bundle`).
 
 ## Build and run
@@ -61,8 +64,9 @@ headers for egui/winit.
 
 ```
 cargo build -p peak-plugin      # the CLAP probe dlopens this cdylib
-cargo test --workspace          # 56 tests: engine, firmware, presets, panel, host
+cargo test --workspace          # unit & integration tests across all crates
 cargo run -p peak-panel         # open the panel (no audio)
+cargo run -p peak-emulator --bin emulate  # launch firmware emulator GUI (OLED + Voice LEDs)
 ```
 
 Plugin:
@@ -76,6 +80,28 @@ README screenshot (needs `xvfb-run` when there is no display):
 
 ```
 PEAK_PANEL_PRESET=3 scripts/screenshot.sh   # -> assets/panel.png (GLASS PAD)
+```
+
+## Firmware Emulator
+
+ReplicantPeak includes an ARM Cortex-M4 microcontroller emulator (`crates/peak-emulator`) powered by Unicorn Engine, capable of executing the genuine Novation Peak firmware image (`.syx`).
+
+- **SysEx Loader:** Extracts and decodes the 7-to-8 bit packed MIDI SysEx stream into the raw 249 KB binary payload.
+- **Memory Map:** Mapped to Flash at `0x08000000` and SRAM at `0x20000000`, with Cortex-M bit-band aliases at `0x42000000` / `0x22000000`.
+- **MMIO Peripherals:** Emulates STM32F4 hardware peripherals:
+  - RCC & PWR clock/voltage registers (handling HSE/PLL ready loops).
+  - USART6 & UART4 serial consoles.
+  - GPIOA through GPIOE with virtual control input injection and output pin monitoring.
+  - SPI1, SPI2, SPI3, SPI4 connected to the OLED display and Oxford FPGA.
+  - SysTick & timer tick generation for firmware delay loops.
+- **Hardware GUI:** An interactive egui dashboard featuring the authentic 256×64 OLED display, 8 Voice Activity LEDs, status LEDs, CPU controls, register viewer, live serial terminal, and real-time MMIO trace.
+
+```bash
+# Run with interactive GUI (OLED + Voice LEDs)
+cargo run -p peak-emulator --bin emulate
+
+# Run headless with execution trace (e.g. 100,000 instructions)
+cargo run -p peak-emulator --bin emulate -- --headless --steps 100000 --trace
 ```
 
 ## Presets
