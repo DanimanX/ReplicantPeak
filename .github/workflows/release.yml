@@ -46,7 +46,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
-            libx11-dev libx11-xcb-dev libxcb1-dev libgl1-mesa-dev
+            libx11-dev libx11-xcb-dev libxcb1-dev libgl1-mesa-dev \
+            libasound2-dev libjack-jackd2-dev
 
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
@@ -82,7 +83,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
-            libx11-dev libx11-xcb-dev libxcb1-dev libgl1-mesa-dev
+            libx11-dev libx11-xcb-dev libxcb1-dev libgl1-mesa-dev \
+            libasound2-dev libjack-jackd2-dev
 
       - name: Build bundles
         run: cargo xtask bundle peak-plugin --release

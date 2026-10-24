@@ -35,7 +35,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
-            libx11-dev libx11-xcb-dev libxcb1-dev libgl1-mesa-dev
+            libx11-dev libx11-xcb-dev libxcb1-dev libgl1-mesa-dev \
+            libasound2-dev libjack-jackd2-dev
 
       - run: cargo fmt --all -- --check
 
@@ -61,7 +62,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
-            libx11-dev libx11-xcb-dev libxcb1-dev libgl1-mesa-dev
+            libx11-dev libx11-xcb-dev libxcb1-dev libgl1-mesa-dev \
+            libasound2-dev libjack-jackd2-dev
 
       # The cdylib is what the CLAP probe dlopens, and `cargo test` does not
       # build it on its own.

@@ -3,6 +3,18 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [1.0.8] — 2026-10-24
+
+### Added
+
+- **Full Standalone Synthesizer Application (`peak-standalone` / `ReplicantPeak`):**
+  - Included a first-class standalone desktop synthesizer binary (`crates/peak-plugin/src/bin/peak_standalone.rs` and `crates/peak-plugin/src/main.rs`).
+  - Powered by NIH-plug's native standalone engine with `cpal` and `midir`, connecting directly to physical/virtual MIDI keyboards, USB controllers, and system audio interfaces (ALSA, JACK, PipeWire, PulseAudio on Linux; CoreAudio on macOS; WASAPI on Windows) without requiring a DAW.
+  - Bundling and packaging support: `cargo xtask bundle peak-plugin` now generates `target/bundled/ReplicantPeak` standalone application alongside VST3 and CLAP bundles.
+  - Release packaging (`scripts/package-bundles.py`) now packages `ReplicantPeak-<version>-<os>-standalone.zip` release archives.
+  - Configurable command-line options (`--help`): backend selection (`auto`, `alsa`, `jack`, `dummy`), sample rate, buffer period size, input/output audio devices, MIDI input selection, and JACK port routing.
+  - CI & Release workflows updated with `libasound2-dev` and `libjack-jackd2-dev` dependencies.
+
 ## [1.0.7] — 2026-10-24
 
 ### Fixed & Added

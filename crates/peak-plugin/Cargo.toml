@@ -23,7 +23,15 @@ crossbeam = "0.8"
 git = "https://github.com/robbert-vdh/nih-plug.git"
 rev = "de421011f41a6d10fc8c7a6084e4f4dee0143683"
 default-features = false
-features = ["vst3"]
+features = ["vst3", "standalone"]
+
+[[bin]]
+name = "peak_plugin"
+path = "src/main.rs"
+
+[[bin]]
+name = "peak-standalone"
+path = "src/bin/peak_standalone.rs"
 
 [dependencies.nih_plug_egui]
 git = "https://github.com/robbert-vdh/nih-plug.git"

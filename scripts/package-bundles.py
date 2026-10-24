@@ -50,6 +50,21 @@ def _add(zf: zipfile.ZipFile, path: Path, arcname: Path) -> None:
     zf.writestr(info, path.read_bytes())
 
 
+def find_standalone(bundled: Path, os_name: str) -> Path | None:
+    candidates = []
+    if os_name == "macos":
+        candidates = [bundled / "ReplicantPeak.app", bundled / "ReplicantPeak"]
+    elif os_name == "windows":
+        candidates = [bundled / "ReplicantPeak.exe", bundled / "ReplicantPeak"]
+    else:
+        candidates = [bundled / "ReplicantPeak", bundled / "ReplicantPeak.bin"]
+
+    for c in candidates:
+        if c.exists():
+            return c
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundled", type=Path, default=Path("target/bundled"))
@@ -74,6 +89,18 @@ def main() -> int:
         dest = args.out / f"ReplicantPeak-{args.version}-{args.os}-{fmt}.zip"
         with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
             _add(zf, src, Path(src.name))
+            if args.license.is_file():
+                _add(zf, args.license, Path(args.license.name))
+
+        size = dest.stat().st_size
+        entries = len(zipfile.ZipFile(dest).namelist())
+        print(f"{dest}  ({entries} entries, {size / 1024:.0f} KiB)")
+
+    standalone_src = find_standalone(args.bundled, args.os)
+    if standalone_src is not None:
+        dest = args.out / f"ReplicantPeak-{args.version}-{args.os}-standalone.zip"
+        with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
+            _add(zf, standalone_src, Path(standalone_src.name))
             if args.license.is_file():
                 _add(zf, args.license, Path(args.license.name))
 

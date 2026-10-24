@@ -6,15 +6,15 @@
 ![ReplicantPeak panel](assets/panel.png)
 
 A three-oscillator wavetable synthesizer inspired by the Novation Peak, written
-in Rust and shipped as a **VST3 / CLAP** plugin plus a standalone panel that
-renders exactly the same interface.
+in Rust and shipped as a **VST3 / CLAP / Standalone** synth application plus a standalone
+preview panel.
 
 The engine links genuine Peak firmware images (`.syx`), executing the STM32F429
 ARM Cortex-M4 microcontroller code via an integrated Unicorn-based hardware
 emulator that drives the authentic 256×64 OLED display panel, voice activity LEDs,
 and parameter states.
 
-- **Status**: v1.0.7, Persistent firmware link across instances & Cyberpunk Blade Runner demo update.
+- **Status**: v1.0.8, Standalone Synthesizer Application, VST3 & CLAP bundles, persistent firmware link.
 - **Demo Video**: [Cyberpunk / Blade Runner Video Demonstration](assets/cyberpunk_blade_runner_demo.mp4) (46s Full HD).
 - **License**: MIT for the code. The firmware is not included and not covered by
   that license (see [Firmware](#firmware)).
@@ -170,11 +170,32 @@ attached as one archive per format:
 ```
 ReplicantPeak-<version>-<os>-clap.zip
 ReplicantPeak-<version>-<os>-vst3.zip
+ReplicantPeak-<version>-<os>-standalone.zip
 ```
 
-Unzip and copy the bundle into your plugin directory. The macOS builds are
-unsigned, so Gatekeeper needs the usual manual approval
-(<https://disable-gatekeeper.github.io/>).
+Unzip and copy the plugin bundle into your DAW's plugin directory, or extract and run the
+**Standalone** application directly to play the synth without needing a DAW.
+
+### Running Standalone
+
+To run the standalone synthesizer directly:
+
+```bash
+# Run standalone directly connecting to system audio & MIDI
+cargo run --release -p peak-plugin --bin peak-standalone
+
+# Or run the bundled executable
+cargo xtask bundle peak-plugin --release
+./target/bundled/ReplicantPeak
+```
+
+The standalone executable accepts CLI arguments to configure audio/MIDI backends (`--help`):
+- `-b, --backend <auto|jack|alsa|dummy>`
+- `-r, --sample-rate <48000>`
+- `-p, --period-size <512>`
+- `--input-device <DEVICE>` / `--output-device <DEVICE>`
+- `--midi-input <DEVICE>`
+- `--connect-jack-inputs <PORTS>` / `--connect-jack-midi-input <PORT>`
 
 ## The firmware gate
 
