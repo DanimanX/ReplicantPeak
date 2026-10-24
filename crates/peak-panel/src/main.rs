@@ -93,6 +93,8 @@ impl Preview {
 
         if let Ok(path) = std::env::var("PEAK_FIRMWARE") {
             preview.link_path(&path);
+        } else if let Some(saved) = peak_core::load_last_firmware_path() {
+            preview.link_path(&saved.to_string_lossy());
         } else {
             let default = PathBuf::from("../firmware/peak-firmware-2.2-build2108.syx");
             if default.exists() {
@@ -111,6 +113,12 @@ impl Preview {
                         linked.path.clone(),
                     ));
                     self.bank = Some(linked.bank);
+                    if let Some(path) = &linked.path {
+                        let p = std::path::Path::new(path);
+                        if p.is_file() {
+                            let _ = peak_core::save_last_firmware_path(p);
+                        }
+                    }
                     if let Some(path) = &linked.path {
                         if let Ok(data) = std::fs::read(path) {
                             if let Ok(binary) = peak_emulator::FirmwareBinary::from_bytes(&data) {
@@ -182,6 +190,15 @@ impl PanelHost for Preview {
         std::thread::spawn(move || {
             let result =
                 peak_core::link_firmware(&bytes, Some(name)).map_err(|error| error.to_string());
+            if result.is_ok() {
+                if let Some(cfg) = peak_core::config_dir() {
+                    let _ = std::fs::create_dir_all(&cfg);
+                    let cached_file = cfg.join("cached_peak_firmware.syx");
+                    if std::fs::write(&cached_file, &bytes).is_ok() {
+                        let _ = peak_core::save_last_firmware_path(&cached_file);
+                    }
+                }
+            }
             let _ = tx.try_send(result);
         });
     }

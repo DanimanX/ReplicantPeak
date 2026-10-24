@@ -3,6 +3,19 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [1.0.7] — 2026-10-24
+
+### Fixed & Added
+
+- **Persistent Firmware Path Across Instances (`firmware_path.txt`):**
+  - Resolved issue where newly inserted plugin instances or standalone panel sessions always prompted with the "FIRMWARE LINK REQUIRED" gate upon loading.
+  - Added user configuration storage (`peak_core::save_last_firmware_path`, `peak_core::load_last_firmware_path`, `peak_core::config_dir`) saving the canonical firmware location to `~/.config/ReplicantPeak/firmware_path.txt` (Linux/XDG), `%APPDATA%\ReplicantPeak\firmware_path.txt` (Windows), or `~/Library/Application Support/ReplicantPeak/firmware_path.txt` (macOS).
+  - Background auto-relink on instance initialization: `ReplicantPeak::initialize()`, `ReplicantPeak::editor()`, and `relink_from_state` automatically detect and link the remembered firmware file, unlocking the synthesis engine seamlessly without user intervention.
+  - Preserved drag-and-drop file paths: UI drag-and-drop handler now extracts and links the actual file path on disk rather than stripping it down to raw in-memory bytes.
+  - Added in-memory firmware bytes fallback caching (`cached_peak_firmware.syx`) for sandboxed drag-and-drop environments.
+  - Standalone preview panel (`peak-panel`) now checks and restores the remembered firmware path on launch.
+  - Added unit test `relinks_automatically_from_persistent_path` verifying automated background relinking from persisted configuration.
+
 ## [1.0.6] — 2026-10-24
 
 ### Added

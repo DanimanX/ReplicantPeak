@@ -1442,7 +1442,11 @@ fn handle_dropped_files(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut Panel
                 }
                 continue;
             }
-            host.link_bytes(&file.name, &bytes);
+            if let Some(path) = &file.path {
+                host.link_path(&path.to_string_lossy());
+            } else {
+                host.link_bytes(&file.name, &bytes);
+            }
             state.link_attempted = true;
         } else if let Some(path) = &file.path {
             host.link_path(&path.to_string_lossy());
@@ -1540,6 +1544,11 @@ fn gate(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut PanelState, panel: Re
         pos2(card.left() + 40.0, card.top() + 214.0),
         vec2(card.width() - 80.0 - 96.0, 28.0),
     );
+    if state.path_input.is_empty() {
+        if let Some(p) = peak_core::read_last_firmware_path_unverified() {
+            state.path_input = p.to_string_lossy().to_string();
+        }
+    }
     ui.scope_builder(egui::UiBuilder::new().max_rect(field), |ui| {
         let edit = egui::TextEdit::singleline(&mut state.path_input)
             .hint_text(" /path/to/peak-firmware-2.2-build2108.syx")

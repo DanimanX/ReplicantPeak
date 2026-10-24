@@ -10,7 +10,11 @@ pub mod preset;
 pub mod wavetable;
 
 pub use dsp::{Engine, Event};
-pub use firmware::{parse as parse_firmware, FirmwareError, FirmwareImage, FwKind};
+pub use firmware::{
+    clear_last_firmware_path, clear_last_firmware_path_if_matches, config_dir,
+    load_last_firmware_path, parse as parse_firmware, read_last_firmware_path_unverified,
+    save_last_firmware_path, FirmwareError, FirmwareImage, FwKind,
+};
 pub use params::{Patch, P};
 pub use preset::Bank as PresetBank;
 pub use wavetable::Bank;

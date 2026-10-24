@@ -14,7 +14,7 @@ ARM Cortex-M4 microcontroller code via an integrated Unicorn-based hardware
 emulator that drives the authentic 256×64 OLED display panel, voice activity LEDs,
 and parameter states.
 
-- **Status**: v1.0.6, Oxford oscillator & Cyberpunk Blade Runner demo update.
+- **Status**: v1.0.7, Persistent firmware link across instances & Cyberpunk Blade Runner demo update.
 - **Demo Video**: [Cyberpunk / Blade Runner Video Demonstration](assets/cyberpunk_blade_runner_demo.mp4) (46s Full HD).
 - **License**: MIT for the code. The firmware is not included and not covered by
   that license (see [Firmware](#firmware)).
@@ -196,9 +196,10 @@ message count. The resulting SHA-256 is compared against the known-build table
 in `crates/peak-core/src/firmware.rs`, so the panel reports `VERIFIED` or
 `UNVERIFIED` instead of trusting a filename.
 
-The link path is saved with the project state, so reopening a session revalidates
-in the background and the instrument makes sound without asking again. The path
-is saved; the firmware contents are not.
+The link path is persisted both across plugin instances (saved to user configuration
+as `firmware_path.txt`) and within DAW project session state. Any new plugin instance,
+new track, or reopened project relinks and revalidates in the background automatically
+without prompting or requiring the firmware file to be re-selected.
 
 ## Firmware
 

@@ -11,6 +11,8 @@
 //! linked, (2) a fingerprint against the known-build table below, and (3) a
 //! deterministic seed for the user wavetables. Nothing is uploaded anywhere.
 
+use std::path::{Path, PathBuf};
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -311,9 +313,135 @@ pub fn parse(bytes: &[u8]) -> Result<FirmwareImage, FirmwareError> {
 }
 
 /// Convenience wrapper for the common "read the file, validate it" path.
-pub fn parse_file(path: &std::path::Path) -> Result<FirmwareImage, String> {
+pub fn parse_file(path: &Path) -> Result<FirmwareImage, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     parse(&bytes).map_err(|e| e.to_string())
+}
+
+/// Where ReplicantPeak's user configuration and cached settings live.
+pub fn config_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let base = if cfg!(target_os = "windows") {
+        std::env::var_os("APPDATA").map(PathBuf::from)
+    } else if cfg!(target_os = "macos") {
+        home.map(|h| h.join("Library/Application Support"))
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home.map(|h| h.join(".config")))
+    };
+    base.map(|b| b.join("ReplicantPeak"))
+}
+
+/// The file path used to persist the location of the validated Novation Peak firmware.
+pub fn firmware_path_file() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("firmware_path.txt"))
+}
+
+/// Reads whatever raw path was last stored in the configuration or environment,
+/// without verifying whether the file exists on disk.
+pub fn read_last_firmware_path_unverified() -> Option<PathBuf> {
+    if let Ok(env_path) = std::env::var("PEAK_FIRMWARE") {
+        let trimmed = env_path.trim();
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed));
+        }
+    }
+
+    if let Some(file) = firmware_path_file() {
+        if let Ok(content) = std::fs::read_to_string(&file) {
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+                return Some(PathBuf::from(trimmed));
+            }
+        }
+    }
+
+    if let Some(preset_d) = crate::preset::preset_dir() {
+        if let Some(parent) = preset_d.parent() {
+            let file = parent.join("firmware_path.txt");
+            if let Ok(content) = std::fs::read_to_string(&file) {
+                let trimmed = content.trim();
+                if !trimmed.is_empty() {
+                    return Some(PathBuf::from(trimmed));
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Save the path to the validated Novation Peak firmware image for future sessions.
+pub fn save_last_firmware_path(path: &Path) -> std::io::Result<()> {
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let path_str = canonical.to_string_lossy();
+
+    if let Some(file) = firmware_path_file() {
+        if let Some(parent) = file.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&file, path_str.as_bytes());
+    }
+
+    if let Some(preset_d) = crate::preset::preset_dir() {
+        if let Some(parent) = preset_d.parent() {
+            let backup_file = parent.join("firmware_path.txt");
+            if let Some(p) = backup_file.parent() {
+                let _ = std::fs::create_dir_all(p);
+            }
+            let _ = std::fs::write(&backup_file, path_str.as_bytes());
+        }
+    }
+
+    Ok(())
+}
+
+/// Remove the persisted firmware path.
+pub fn clear_last_firmware_path() {
+    if let Some(file) = firmware_path_file() {
+        let _ = std::fs::remove_file(file);
+    }
+    if let Some(preset_d) = crate::preset::preset_dir() {
+        if let Some(parent) = preset_d.parent() {
+            let backup_file = parent.join("firmware_path.txt");
+            let _ = std::fs::remove_file(backup_file);
+        }
+    }
+}
+
+/// Remove the persisted firmware path only if it matches `path`.
+pub fn clear_last_firmware_path_if_matches(path: &str) {
+    if let Some(saved) = read_last_firmware_path_unverified() {
+        if saved.to_string_lossy() == path {
+            clear_last_firmware_path();
+        }
+    }
+}
+
+/// Try to load the path to the Novation Peak firmware from disk or environment.
+/// Returns `Some(path)` only if the target file actually exists on disk.
+pub fn load_last_firmware_path() -> Option<PathBuf> {
+    if let Some(p) = read_last_firmware_path_unverified() {
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+
+    // Common development or bundle repository locations
+    for candidate in [
+        "firmware/peak-firmware-2.2-build2108.syx",
+        "../firmware/peak-firmware-2.2-build2108.syx",
+        "../../firmware/peak-firmware-2.2-build2108.syx",
+    ] {
+        let p = PathBuf::from(candidate);
+        if p.is_file() {
+            let canon = std::fs::canonicalize(&p).unwrap_or(p);
+            return Some(canon);
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -460,5 +588,34 @@ mod tests {
         assert_eq!(img.kind, FwKind::Firmware);
         assert!(img.is_reference_build(), "got {}", img.version_label());
         assert_eq!(img.sha_short(), "f9d50b4268a5");
+    }
+
+    #[test]
+    fn firmware_path_persistence_roundtrip() {
+        let temp_dir = std::env::temp_dir().join("replicant_peak_test_fw");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let dummy_fw = temp_dir.join("test_peak_firmware.syx");
+        std::fs::write(&dummy_fw, b"dummy firmware content").unwrap();
+
+        assert!(save_last_firmware_path(&dummy_fw).is_ok());
+
+        let read = read_last_firmware_path_unverified();
+        assert!(read.is_some());
+        let read_path = read.unwrap();
+        assert_eq!(
+            std::fs::canonicalize(&dummy_fw).unwrap(),
+            std::fs::canonicalize(&read_path).unwrap()
+        );
+
+        let loaded = load_last_firmware_path();
+        assert!(loaded.is_some());
+
+        clear_last_firmware_path();
+        let after_clear = read_last_firmware_path_unverified();
+        if std::env::var("PEAK_FIRMWARE").is_err() {
+            assert!(after_clear.is_none());
+        }
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

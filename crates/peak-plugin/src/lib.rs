@@ -141,6 +141,7 @@ fn spawn_link(
                     if let Ok(mut slot) = store.lock() {
                         *slot = None;
                     }
+                    peak_core::clear_last_firmware_path_if_matches(&path);
                 }
                 shared.set_status(LinkStatus::Failed(message));
                 return;
@@ -153,16 +154,28 @@ fn spawn_link(
                     if let Ok(mut slot) = store.lock() {
                         *slot = None;
                     }
+                    peak_core::clear_last_firmware_path_if_matches(&path);
                 }
                 shared.set_status(LinkStatus::Failed(error.to_string()));
             }
             Ok(linked) => {
-                let stamp = FirmwareStamp::from_image(&linked.image, Some(path));
+                let stamp = FirmwareStamp::from_image(&linked.image, Some(path.clone()));
                 if let Ok(mut slot) = store.lock() {
                     *slot = Some(stamp);
                 }
                 if let Ok(mut bank) = shared.bank.lock() {
                     *bank = Some(linked.bank.clone());
+                }
+                // Persist the verified firmware path so any future plugin instances remember it
+                let path_obj = std::path::Path::new(&path);
+                if path_obj.is_file() {
+                    let _ = peak_core::save_last_firmware_path(path_obj);
+                } else if let Some(cfg) = peak_core::config_dir() {
+                    let _ = std::fs::create_dir_all(&cfg);
+                    let cached_file = cfg.join("cached_peak_firmware.syx");
+                    if std::fs::write(&cached_file, &data).is_ok() {
+                        let _ = peak_core::save_last_firmware_path(&cached_file);
+                    }
                 }
                 // Initialize the ARM Cortex-M hardware emulator with the binary
                 if let Ok(binary) = peak_emulator::FirmwareBinary::from_bytes(&data) {
@@ -204,20 +217,25 @@ fn map_note_event(event: NoteEvent<()>) -> Option<Event> {
 }
 
 /// Editor-frame relink: if the session has a firmware stamp but the engine has
-/// no bank and no link is in flight, start one. `spawn_link` switches the status
-/// to `Working` before returning, so this runs at most once per attempt.
+/// no bank and no link is in flight, start one. If the session has no stamp,
+/// check if the plugin previously remembered where the firmware was on disk.
 fn relink_from_state(state: &EditorState) {
     if state.shared.bank_linked() || state.shared.status() != LinkStatus::Idle {
         return;
     }
-    let Some(path) = state
+    let session_path = state
         .params
         .firmware
         .lock()
         .ok()
         .and_then(|guard| guard.clone())
-        .and_then(|stamp| stamp.path)
-    else {
+        .and_then(|stamp| stamp.path);
+
+    let path = session_path
+        .filter(|p| std::path::Path::new(p).is_file())
+        .or_else(|| peak_core::load_last_firmware_path().map(|p| p.to_string_lossy().to_string()));
+
+    let Some(path) = path else {
         return;
     };
     spawn_link(
@@ -231,21 +249,28 @@ fn relink_from_state(state: &EditorState) {
 }
 
 impl ReplicantPeak {
-    /// Hand the firmware path saved with the session to the linker, at most once
-    /// per distinct path. A failed attempt is not retried automatically: the
-    /// panel reports the error and the user can point at a file again.
+    /// Hand the firmware path saved with the session (or the remembered system path)
+    /// to the linker, at most once per distinct path. A failed attempt is not retried
+    /// automatically: the panel reports the error and the user can point at a file again.
     fn relink_saved(&mut self) {
         if self.engine.has_bank() {
             return;
         }
-        let Some(path) = self
+        let session_path = self
             .params
             .firmware
             .lock()
             .ok()
             .and_then(|guard| guard.clone())
-            .and_then(|stamp| stamp.path)
-        else {
+            .and_then(|stamp| stamp.path);
+
+        let path = session_path
+            .filter(|p| std::path::Path::new(p).is_file())
+            .or_else(|| {
+                peak_core::load_last_firmware_path().map(|p| p.to_string_lossy().to_string())
+            });
+
+        let Some(path) = path else {
             return;
         };
         if self.relinked_path.as_deref() == Some(path.as_str()) {
@@ -911,5 +936,57 @@ mod tests {
             map_note_event(cases[1]),
             Some(Event::NoteOff { note: 60 })
         ));
+    }
+
+    #[test]
+    fn relinks_automatically_from_persistent_path() {
+        let temp_dir = std::env::temp_dir().join("replicant_plugin_relink_test");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let dummy_fw = temp_dir.join("peak_test_fw.syx");
+
+        let mut bytes = Vec::new();
+        for i in 0..128u32 {
+            bytes.extend_from_slice(&[
+                0xF0,
+                0x00,
+                0x20,
+                0x29,
+                0x00,
+                0x71,
+                0x00,
+                0x7E,
+                (i % 128) as u8,
+                0xF7,
+            ]);
+        }
+        std::fs::write(&dummy_fw, &bytes).unwrap();
+
+        peak_core::save_last_firmware_path(&dummy_fw).unwrap();
+
+        let mut plugin = ReplicantPeak::default();
+        assert!(!plugin.engine.has_bank());
+
+        plugin.relink_saved();
+
+        let mut attempts = 0;
+        while attempts < 100 {
+            while let Ok(linked) = plugin.link_rx.try_recv() {
+                plugin.engine.set_bank(linked.bank);
+            }
+            if plugin.engine.has_bank() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            attempts += 1;
+        }
+
+        assert!(
+            plugin.engine.has_bank(),
+            "Plugin failed to relink automatically from persistent firmware path"
+        );
+        assert!(plugin.shared.bank_linked());
+
+        peak_core::clear_last_firmware_path();
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
