@@ -3,6 +3,30 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [1.0.4] — 2026-10-24
+
+### Added & Improved
+
+- **Oxford Oscillator DSP Engine Overhaul (`New Oxford Oscillators`):**
+  - Bandlimited PolyBLEP (polynomial bandlimited step) oscillator generator for analogue shapes (Saw, Pulse, Triangle, Sine), eliminating aliasing across the entire audio band.
+  - Authentic Oxford **Triple-Saw (Saw Density / Detune)**: When Sawtooth is selected with positive SHAPE, blends in two symmetrically detuned side saws ($\pm 35$ cents) with independent phase accumulators to create a massive, lush analog supersaw cluster. When SHAPE is negative, morphs the ramp slope into a dual-ramp waveform.
+  - Continuous **PolyBLEP Pulse Width Modulation (PWM)**: Modulates pulse duty cycle seamlessly from 2% to 98% with anti-aliased transitions.
+  - Oxford Wavefolded Saturation: Shape-driven wavefolder for Triangle and Sine waveforms, generating rich analog overtones.
+- **Analogue OTA Multimode Filter (Chris Huggett Architecture):**
+  - Modeled after the Bass Station II and OSCar analog filters.
+  - 12 dB/oct: 2-pole OTA state-variable filter with non-linear saturation on resonance integrators.
+  - 24 dB/oct: 4-pole cascaded OTA ladder with global non-linear feedback and authentic self-oscillation into a warm, screaming sine wave across the keyboard ($Q \ge 0.95$).
+  - Per-sample cutoff evaluation (zero decimation, removing 16-sample block rate) ensuring full audio-rate filter FM (`Osc3FilterMod`) and instantaneous sub-millisecond envelope attacks.
+  - Filter Diverge: Modeled analog component tolerance variations ($\pm 1.5\%$) per voice for wide, organic polyphonic imaging.
+- **Multi-Stage Asymmetric Analogue Saturation & Tone Circuit:**
+  - Replaced sterile symmetric `tanh` with monotonic asymmetric transfer curves generating rich 2nd and 4th order even harmonics for pre-filter drive, post-filter drive, and master distortion.
+  - 14 kHz analog 1-pole smoothing filter on master distortion to emulate analog guitar/synth pedal presence without harsh digital fizz.
+  - AC-coupling DC blocker emulating physical hardware line output coupling capacitors.
+- **SysEx Preset Ingestion (`.syx`):**
+  - Full ingestion of `FM12`, `FM23`, `Osc3FilterMod`, `Drift`, and `Diverge` parameters from Novation Peak 527-byte patch dumps.
+- **Acoustic Cycle-by-Cycle Verification:**
+  - Automated acoustic test suite analyzing waveforms sound-by-sound for all 10 Montfrooij `PeakDist03` presets demonstrated in video `https://www.youtube.com/watch?v=9DpocpgXDaM`.
+
 ## [1.0.3] — 2026-10-24
 
 ### Added

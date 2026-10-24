@@ -631,6 +631,20 @@ pub fn parse_syx_patch(data: &[u8]) -> Result<(String, Patch), String> {
     patch.set(P::RingLevel, norm(139));
     patch.set(P::NoiseLevel, norm(140));
 
+    // Cross-modulation & Filter FM
+    patch.set(P::Fm12, norm(144));
+    patch.set(P::Fm23, norm(145));
+    let osc3_mod = norm(149).max(norm(153));
+    patch.set(P::Osc3FilterMod, osc3_mod);
+
+    // Voicing: Drift and Diverge
+    if get_u7(127) > 0.0 {
+        patch.set(P::Drift, norm(127));
+    }
+    if get_u7(125) > 0.0 {
+        patch.set(P::Diverge, norm(125));
+    }
+
     // Filter
     patch.set(P::Drive, norm(160));
     patch.set(P::Cutoff, log_scale(161, 20.0, 20000.0));

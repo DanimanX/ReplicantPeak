@@ -21,8 +21,6 @@ pub enum Event {
 }
 
 const MAX_VOICES: usize = 16;
-/// Filter coefficients are refreshed at this rate instead of per sample.
-const FILTER_CHUNK: usize = 16;
 const DENORMAL_GUARD: f32 = 1.0e-20;
 
 #[inline]
@@ -210,53 +208,188 @@ impl Adsr {
     }
 }
 
-/// Topology-preserving state variable filter (Zavalishin). Stable under
-/// modulation and at high resonance.
-#[derive(Clone, Copy, Default)]
-pub struct Svf {
-    ic1: f32,
-    ic2: f32,
-    g: f32,
-    k: f32,
-    a1: f32,
-    a2: f32,
-    a3: f32,
+/// Chris Huggett-inspired OTA multimode filter (Bass Station II / Peak architecture).
+/// Provides 12 dB/oct (2-pole OTA state variable) and 24 dB/oct (4-pole cascaded OTA ladder
+/// with non-linear saturation and authentic self-oscillation into a warm sine wave).
+#[inline]
+pub fn ota_sat(x: f32) -> f32 {
+    x / (1.0 + 0.33 * x.abs())
 }
 
-impl Svf {
-    fn set(&mut self, cutoff_hz: f32, q: f32, sample_rate: f32) {
-        let nyquist = sample_rate * 0.5;
-        let fc = cutoff_hz.clamp(10.0, nyquist * 0.98);
-        self.g = (std::f32::consts::PI * fc / sample_rate).tan();
-        // q is 0..1 from the UI; map to 0.5..~20 (self-oscillation territory).
-        let damping = 2.0 - 1.98 * q.clamp(0.0, 0.999);
-        self.k = damping.max(0.02);
-        self.a1 = 1.0 / (1.0 + self.g * (self.g + self.k));
-        self.a2 = self.g * self.a1;
-        self.a3 = self.g * self.a2;
+#[inline]
+pub fn analog_diode_sat(x: f32, drive: f32) -> f32 {
+    let xin = x * drive;
+    // Monotonic asymmetric transfer curve generating even harmonics (2nd and 4th)
+    // with different positive/negative diode saturation thresholds without rectification.
+    if xin >= 0.0 {
+        xin / (1.0 + 0.75 * xin)
+    } else {
+        xin / (1.0 - 1.25 * xin)
     }
+}
 
-    fn reset(&mut self) {
-        self.ic1 = 0.0;
-        self.ic2 = 0.0;
+#[inline]
+pub fn polyblep(t: f64, dt: f64) -> f32 {
+    if t < dt {
+        let d = t / dt;
+        (2.0 * d - d * d - 1.0) as f32
+    } else if t > 1.0 - dt {
+        let d = (t - 1.0) / dt;
+        (d * d + 2.0 * d + 1.0) as f32
+    } else {
+        0.0
+    }
+}
+
+/// One-pole lowpass filter for analog smoothing in the distortion stage.
+#[derive(Clone, Copy)]
+pub struct OnePoleLp {
+    z: f32,
+    coeff: f32,
+}
+
+impl OnePoleLp {
+    pub fn new(cutoff_hz: f32, sample_rate: f32) -> Self {
+        let coeff =
+            (1.0 - (-std::f32::consts::TAU * cutoff_hz / sample_rate).exp()).clamp(0.0, 1.0);
+        Self { z: 0.0, coeff }
     }
 
     #[inline]
-    fn tick(&mut self, input: f32, mode: u8) -> f32 {
-        let v3 = input - self.ic2;
-        let v1 = self.a1 * self.ic1 + self.a2 * v3;
-        let v2 = self.ic2 + self.a2 * self.ic1 + self.a3 * v3;
-        self.ic1 = 2.0 * v1 - self.ic1;
-        self.ic2 = 2.0 * v2 - self.ic2;
-        self.ic1 = flush(self.ic1);
-        self.ic2 = flush(self.ic2);
-        let low = v2;
-        let band = v1;
-        let high = input - self.k * v1 - v2;
-        match mode {
-            0 => low,
-            1 => band,
-            _ => high,
+    pub fn tick(&mut self, input: f32) -> f32 {
+        self.z += (input - self.z) * self.coeff;
+        flush(self.z)
+    }
+
+    pub fn reset(&mut self) {
+        self.z = 0.0;
+    }
+}
+
+/// AC-coupling DC blocker emulating physical hardware output capacitors.
+#[derive(Clone, Copy, Default)]
+pub struct DcBlocker {
+    x_prev: f32,
+    y_prev: f32,
+}
+
+impl DcBlocker {
+    #[inline]
+    pub fn tick(&mut self, input: f32) -> f32 {
+        let y = input - self.x_prev + 0.9985 * self.y_prev;
+        self.x_prev = input;
+        self.y_prev = flush(y);
+        self.y_prev
+    }
+
+    pub fn reset(&mut self) {
+        self.x_prev = 0.0;
+        self.y_prev = 0.0;
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct OtaFilter {
+    // 2-pole OTA SVF states
+    ic1: f32,
+    ic2: f32,
+    // 4-pole cascaded OTA ladder states
+    s0: f32,
+    s1: f32,
+    s2: f32,
+    s3: f32,
+}
+
+impl OtaFilter {
+    pub fn reset(&mut self) {
+        self.ic1 = 0.0;
+        self.ic2 = 0.0;
+        self.s0 = 0.0;
+        self.s1 = 0.0;
+        self.s2 = 0.0;
+        self.s3 = 0.0;
+    }
+
+    #[inline]
+    pub fn tick(
+        &mut self,
+        input: f32,
+        cutoff_hz: f32,
+        q: f32,
+        mode: u8,
+        poles: u8,
+        sample_rate: f32,
+    ) -> f32 {
+        let nyquist = sample_rate * 0.49;
+        let fc = cutoff_hz.clamp(12.0, nyquist);
+
+        if poles == 1 {
+            // 12 dB/oct: 2-pole OTA State Variable Filter
+            let g = (std::f32::consts::PI * fc / sample_rate).tan();
+            let damping = 2.0 - 1.95 * q.clamp(0.0, 0.999);
+            let k = damping.max(0.02);
+            let a1 = 1.0 / (1.0 + g * (g + k));
+            let a2 = g * a1;
+            let a3 = g * a2;
+
+            let v3 = input - self.ic2;
+            let v1 = a1 * self.ic1 + a2 * v3;
+            let v1_sat = ota_sat(v1 * 1.2) / 1.2;
+            let v2 = self.ic2 + a2 * self.ic1 + a3 * v3;
+            self.ic1 = 2.0 * v1_sat - self.ic1;
+            self.ic2 = 2.0 * v2 - self.ic2;
+            self.ic1 = flush(self.ic1);
+            self.ic2 = flush(self.ic2);
+
+            let low = v2;
+            let band = v1;
+            let high = input - k * v1 - v2;
+            match mode {
+                0 => low,
+                1 => band,
+                _ => high,
+            }
+        } else {
+            // 24 dB/oct: 4-pole cascaded OTA ladder with global non-linear feedback
+            let w = (std::f32::consts::PI * fc / sample_rate).min(1.48);
+            let g = w.tan();
+            let big_g = g / (1.0 + g);
+
+            // Feedback amount: reaches self-oscillation at q >= 0.95
+            let k = 3.96 * q.clamp(0.0, 1.0);
+            let fb = k * ota_sat(self.s3 * 1.4);
+            let u = ota_sat(input * (1.0 + 0.3 * q) - fb);
+
+            // Stage 0
+            let v0 = big_g * (u - self.s0);
+            let y0 = v0 + self.s0;
+            self.s0 = y0 + v0;
+
+            // Stage 1
+            let v1 = big_g * (y0 - self.s1);
+            let y1 = v1 + self.s1;
+            self.s1 = y1 + v1;
+
+            // Stage 2
+            let v2 = big_g * (y1 - self.s2);
+            let y2 = v2 + self.s2;
+            self.s2 = y2 + v2;
+
+            // Stage 3
+            let v3 = big_g * (y2 - self.s3);
+            let y3 = v3 + self.s3;
+            self.s3 = y3 + v3;
+
+            self.s0 = flush(self.s0);
+            self.s1 = flush(self.s1);
+            self.s2 = flush(self.s2);
+            self.s3 = flush(self.s3);
+
+            match mode {
+                0 => y3,
+                1 => 3.0 * (y1 - y3),
+                _ => u - 4.0 * y0 + 6.0 * y1 - 4.0 * y2 + y3,
+            }
         }
     }
 }
@@ -340,16 +473,19 @@ struct Voice {
     gate: bool,
     age: u64,
     phase: [f64; 3],
+    aux_phase1: [f64; 3],
+    aux_phase2: [f64; 3],
     freq: f32,
     target_freq: f32,
     amp: Adsr,
     fenv: Adsr,
-    filters: [Svf; 2],
+    filter: OtaFilter,
     lfo1: Lfo,
     lfo2: Lfo,
     drift_phase: f32,
     /// Static per-oscillator tuning offset, Peak's Diverge control (-1..1).
     diverge: [f32; 3],
+    filter_diverge: f32,
     noise_lp: f32,
     rng: u32,
     level: f32,
@@ -363,15 +499,18 @@ impl Voice {
             gate: false,
             age: 0,
             phase: [0.0; 3],
+            aux_phase1: [0.0; 3],
+            aux_phase2: [0.0; 3],
             freq: 0.0,
             target_freq: 0.0,
             amp: Adsr::new(sample_rate),
             fenv: Adsr::new(sample_rate),
-            filters: [Svf::default(); 2],
+            filter: OtaFilter::default(),
             lfo1: Lfo::new(seed ^ 0x9E37_79B9),
             lfo2: Lfo::new(seed ^ 0x85EB_CA6B),
             drift_phase: 0.0,
             diverge: [0.0; 3],
+            filter_diverge: 0.0,
             noise_lp: 0.0,
             rng: seed | 1,
             level: 0.0,
@@ -394,22 +533,28 @@ impl Voice {
             Some(f) => self.freq = f,
             None => self.freq = self.target_freq,
         }
-        self.filters[0].reset();
-        self.filters[1].reset();
+        self.filter.reset();
         self.noise_lp = 0.0;
 
         // Peak's NCOs free-run by default: notes do not all start at phase 0.
         let mut phases = [0.0f64; 3];
-        for p in &mut phases {
-            *p = self.next_unit() as f64;
+        let mut aux1 = [0.0f64; 3];
+        let mut aux2 = [0.0f64; 3];
+        for o in 0..3 {
+            phases[o] = self.next_unit() as f64;
+            aux1[o] = self.next_unit() as f64;
+            aux2[o] = self.next_unit() as f64;
         }
         self.phase = phases;
+        self.aux_phase1 = aux1;
+        self.aux_phase2 = aux2;
         self.drift_phase = self.next_unit();
         let mut diverge = [0.0f32; 3];
         for d in &mut diverge {
             *d = self.next_unit() * 2.0 - 1.0;
         }
         self.diverge = diverge;
+        self.filter_diverge = self.next_unit() * 2.0 - 1.0;
         let seed = self.next_u32();
         self.lfo1.retrigger(seed);
         self.lfo2.retrigger(seed.rotate_left(11));
@@ -652,6 +797,10 @@ pub struct Engine {
     /// Anti-zipper smoothing for the two controls that are audible per sample.
     cutoff_smooth: Smoothed,
     gain_smooth: Smoothed,
+    dist_filter_l: OnePoleLp,
+    dist_filter_r: OnePoleLp,
+    dc_block_l: DcBlocker,
+    dc_block_r: DcBlocker,
 }
 
 impl Engine {
@@ -661,6 +810,8 @@ impl Engine {
         cutoff_smooth.set_time(0.004, sr);
         let mut gain_smooth = Smoothed::new(0.5);
         gain_smooth.set_time(0.010, sr);
+        let dist_filter_l = OnePoleLp::new(14_000.0, sr);
+        let dist_filter_r = OnePoleLp::new(14_000.0, sr);
         Self {
             sample_rate: sr,
             bank: None,
@@ -676,6 +827,10 @@ impl Engine {
             glide_time: 0.0,
             cutoff_smooth,
             gain_smooth,
+            dist_filter_l,
+            dist_filter_r,
+            dc_block_l: DcBlocker::default(),
+            dc_block_r: DcBlocker::default(),
         }
     }
 
@@ -693,6 +848,10 @@ impl Engine {
             *v = Voice::new(sr, 0x1234_5678 ^ (i as u32).wrapping_mul(0x9E37_79B9));
         }
         self.fx = Fx::new(sr);
+        self.dist_filter_l = OnePoleLp::new(14_000.0, sr);
+        self.dist_filter_r = OnePoleLp::new(14_000.0, sr);
+        self.dc_block_l = DcBlocker::default();
+        self.dc_block_r = DcBlocker::default();
         self.peak = 0.0;
     }
 
@@ -715,10 +874,13 @@ impl Engine {
             v.amp.kill();
             v.fenv.kill();
             v.gate = false;
-            v.filters[0].reset();
-            v.filters[1].reset();
+            v.filter.reset();
         }
         self.fx.reset();
+        self.dist_filter_l.reset();
+        self.dist_filter_r.reset();
+        self.dc_block_l.reset();
+        self.dc_block_r.reset();
         self.peak = 0.0;
         self.gain_smooth.snap(0.0);
     }
@@ -1028,22 +1190,97 @@ impl Engine {
                     if f >= nyquist {
                         continue;
                     }
-                    let inc = (f / sr) as f64;
-                    v.phase[o] += inc;
+                    let dt = (f / sr) as f64;
+                    v.phase[o] += dt;
                     if v.phase[o] >= 1.0 {
                         v.phase[o] -= 1.0;
                     }
-                    let level = Bank::level_for(sr, f);
                     let shape = (voicing.osc_shape[o] + shape_mod).clamp(-1.0, 1.0);
 
                     // Phase modulation is Peak's FM O1>O2 / O2>O3 routing.
-                    let mut read_phase = v.phase[o] as f32;
+                    let mut read_phase = v.phase[o];
                     if o == 1 {
-                        read_phase += osc[0] * voicing.fm12 * 0.75;
+                        read_phase += (osc[0] * voicing.fm12 * 0.75) as f64;
                     } else if o == 2 {
-                        read_phase += osc[1] * voicing.fm23 * 0.75;
+                        read_phase += (osc[1] * voicing.fm23 * 0.75) as f64;
                     }
-                    osc[o] = bank.sample_shape(voicing.osc_wave[o], shape, level, read_phase);
+                    read_phase = read_phase.rem_euclid(1.0);
+
+                    let wave_type = voicing.osc_wave[o];
+                    osc[o] = match wave_type {
+                        0 => {
+                            let raw = (read_phase as f32 * std::f32::consts::TAU).sin();
+                            if shape.abs() > 1e-4 {
+                                analog_diode_sat(raw, 1.0 + shape.abs() * 3.5)
+                            } else {
+                                raw
+                            }
+                        }
+                        1 => {
+                            let p = read_phase as f32;
+                            let raw = if p < 0.5 {
+                                4.0 * p - 1.0
+                            } else {
+                                3.0 - 4.0 * p
+                            };
+                            if shape.abs() > 1e-4 {
+                                let folded =
+                                    (raw * (1.0 + shape.abs() * 2.0) * std::f32::consts::FRAC_PI_2)
+                                        .sin();
+                                analog_diode_sat(folded, 1.0 + shape.abs() * 1.5)
+                            } else {
+                                raw
+                            }
+                        }
+                        2 => {
+                            let p = read_phase;
+                            let saw_center = (2.0 * p - 1.0) as f32 - polyblep(p, dt);
+                            if shape > 0.005 {
+                                let detune_cents = 35.0 * shape;
+                                let ratio_side1 = (detune_cents / 1200.0).exp2() as f64;
+                                let ratio_side2 = (-detune_cents / 1200.0).exp2() as f64;
+                                let dt1 = dt * ratio_side1;
+                                let dt2 = dt * ratio_side2;
+
+                                v.aux_phase1[o] += dt1;
+                                if v.aux_phase1[o] >= 1.0 {
+                                    v.aux_phase1[o] -= 1.0;
+                                }
+                                v.aux_phase2[o] += dt2;
+                                if v.aux_phase2[o] >= 1.0 {
+                                    v.aux_phase2[o] -= 1.0;
+                                }
+
+                                let saw_side1 = (2.0 * v.aux_phase1[o] - 1.0) as f32
+                                    - polyblep(v.aux_phase1[o], dt1);
+                                let saw_side2 = (2.0 * v.aux_phase2[o] - 1.0) as f32
+                                    - polyblep(v.aux_phase2[o], dt2);
+
+                                let center_gain = 1.0 - 0.35 * shape;
+                                let side_gain = 0.5 * shape;
+                                (saw_center * center_gain + (saw_side1 + saw_side2) * side_gain)
+                                    / (1.0 + 0.35 * shape)
+                            } else if shape < -0.005 {
+                                let s = -shape;
+                                let dual = (4.0 * ((p * 2.0).fract()) - 2.0) as f32 * 0.5;
+                                saw_center * (1.0 - s * 0.6) + dual * (s * 0.6)
+                            } else {
+                                saw_center
+                            }
+                        }
+                        3 => {
+                            let duty = (0.5 + 0.46 * shape).clamp(0.03, 0.97) as f64;
+                            let naive = if read_phase < duty { 1.0_f32 } else { -1.0_f32 };
+                            let blep1 = polyblep(read_phase, dt);
+                            let phase_d = (read_phase - duty).rem_euclid(1.0);
+                            let blep2 = polyblep(phase_d, dt);
+                            naive + blep1 - blep2
+                        }
+                        _ => {
+                            let level = Bank::level_for(sr, f);
+                            bank.sample_shape(wave_type, shape, level, read_phase as f32)
+                        }
+                    };
                 }
 
                 let mut signal = osc[0] * voicing.osc_level[0]
@@ -1057,37 +1294,42 @@ impl Engine {
                     signal += v.noise(noise_coeff) * voicing.noise;
                 }
 
-                // Pre-filter overdrive, as on Peak's analogue path.
-                if voicing.drive > 1e-4 {
-                    signal = (signal * drive_gain).tanh() * drive_comp;
-                }
+                // Pre-filter overdrive, modeled after Peak's analogue diode saturation
+                let signal_driven = if voicing.drive > 1e-4 {
+                    analog_diode_sat(signal, drive_gain) * drive_comp
+                } else {
+                    signal
+                };
 
                 // Filter: envelope, keytrack, LFO and audio-rate Osc 3 mod.
                 let key_offset = (v.note as f32 - 60.0) / 12.0 * voicing.keytrack;
                 let env_octaves = voicing.env_amt * fenv_level * 5.0;
                 let lfo_octaves = cutoff_mod * 2.0;
-                let osc3_octaves = osc[2] * voicing.osc3_filter_mod * 3.0;
+                let osc3_octaves = osc[2] * voicing.osc3_filter_mod * 3.5;
+                let diverge_offset = v.filter_diverge * voicing.diverge * 0.03;
                 let cutoff = (base_cutoff
-                    * (key_offset + env_octaves + lfo_octaves + osc3_octaves).exp2())
-                .clamp(20.0, sr * 0.45);
-                let stage_reso = if filter_poles == 2 {
-                    voicing.reso * 0.72
+                    * (key_offset + env_octaves + lfo_octaves + osc3_octaves + diverge_offset)
+                        .exp2())
+                .clamp(15.0, nyquist);
+
+                let filtered = v.filter.tick(
+                    signal_driven,
+                    cutoff,
+                    voicing.reso,
+                    voicing.filter_mode,
+                    voicing.filter_poles,
+                    sr,
+                );
+
+                // Post-filter drive (Peak's analogue post-filter saturation)
+                let post_driven = if voicing.drive > 1e-4 {
+                    analog_diode_sat(filtered, 1.0 + voicing.drive * 2.2)
                 } else {
-                    voicing.reso
-                };
-                if i % FILTER_CHUNK == 0 {
-                    v.filters[0].set(cutoff, stage_reso, sr);
-                    v.filters[1].set(cutoff, stage_reso, sr);
-                }
-                let filtered = if voicing.filter_poles == 2 {
-                    let a = v.filters[0].tick(signal, voicing.filter_mode);
-                    v.filters[1].tick(a, voicing.filter_mode)
-                } else {
-                    v.filters[0].tick(signal, voicing.filter_mode)
+                    filtered
                 };
 
                 let amp = amp_level * v.velocity * (1.0 + amp_mod).clamp(0.0, 2.0);
-                let out = filtered * amp;
+                let out = post_driven * amp;
                 // Peak pans alternate voices slightly for width.
                 let pan = if v.note % 2 == 0 { 0.47 } else { 0.53 };
                 mix_l += out * (1.4 - pan);
@@ -1099,8 +1341,10 @@ impl Engine {
             let mut l = mix_l;
             let mut r = mix_r;
             if dist > 1e-4 {
-                l = (l * dist_gain).tanh() / (1.0 + dist);
-                r = (r * dist_gain).tanh() / (1.0 + dist);
+                let sat_l = analog_diode_sat(l, dist_gain) / (1.0 + dist * 0.9);
+                let sat_r = analog_diode_sat(r, dist_gain) / (1.0 + dist * 0.9);
+                l = self.dist_filter_l.tick(sat_l);
+                r = self.dist_filter_r.tick(sat_r);
             }
             if chorus_mix > 1e-4 {
                 self.fx.advance_chorus();
@@ -1116,9 +1360,11 @@ impl Engine {
                 r = self.fx.reverb(1, r, reverb_size, reverb_mix);
             }
 
+            let l_dc = self.dc_block_l.tick(l);
+            let r_dc = self.dc_block_r.tick(r);
             let gain = self.gain_smooth.next();
-            let l = (l * gain).clamp(-1.2, 1.2);
-            let r = (r * gain).clamp(-1.2, 1.2);
+            let l = (l_dc * gain).clamp(-1.2, 1.2);
+            let r = (r_dc * gain).clamp(-1.2, 1.2);
             left[i] = l;
             right[i] = r;
             peak = peak.max(l.abs()).max(r.abs());
@@ -1272,6 +1518,138 @@ mod tests {
                 assert!(s.is_finite(), "{}: sample is not finite", name);
             }
         }
+    }
+
+    #[test]
+    fn sound_by_sound_cycle_acoustic_analysis() {
+        let mut engine = Engine::new(48_000.0);
+        engine.set_bank(crate::wavetable::Bank::generate(777));
+
+        for syx in crate::preset::PEAK_DIST_03_SYX_ALL {
+            engine.reset();
+            let (name, patch) = crate::preset::parse_syx_patch(syx).expect("syx parse");
+
+            // Warm-up 2048 samples for attack and filter settle
+            let mut l_warm = vec![0.0; 2048];
+            let mut r_warm = vec![0.0; 2048];
+            engine.process(
+                &patch,
+                &[Event::NoteOn {
+                    note: 60,
+                    velocity: 0.95,
+                }],
+                &mut l_warm,
+                &mut r_warm,
+            );
+
+            // Render 4096 samples of sustained tone
+            let mut l = vec![0.0; 4096];
+            let mut r = vec![0.0; 4096];
+            engine.process(&patch, &[], &mut l, &mut r);
+
+            let l_rms = rms(&l);
+            let r_rms = rms(&r);
+            assert!(
+                l_rms > 0.005 && r_rms > 0.005,
+                "{name}: audio energy too low (L: {l_rms:.4}, R: {r_rms:.4})"
+            );
+
+            // Verify bounded samples and absence of non-finite values
+            for s in l.iter().chain(r.iter()) {
+                assert!(s.is_finite(), "{name}: non-finite sample detected");
+                assert!(s.abs() <= 1.25, "{name}: sample out of bounds: {s}");
+            }
+
+            // Verify that audio waveform is rich in dynamics and not static silence
+            let mut zero_crossings = 0;
+            for w in l.windows(2) {
+                if (w[0] <= 0.0 && w[1] > 0.0) || (w[0] >= 0.0 && w[1] < 0.0) {
+                    zero_crossings += 1;
+                }
+            }
+            assert!(
+                zero_crossings >= 4,
+                "{name}: insufficient zero crossings ({zero_crossings})"
+            );
+        }
+    }
+
+    #[test]
+    fn ota_ladder_self_oscillates_at_high_resonance() {
+        let mut filter = OtaFilter::default();
+        let sr = 48_000.0;
+        let fc = 1000.0;
+        let q = 1.0; // Self-oscillation
+
+        // Excite with a single impulse
+        let mut out = Vec::with_capacity(4096);
+        for i in 0..4096 {
+            let inp = if i == 0 { 0.5 } else { 0.0 };
+            let s = filter.tick(inp, fc, q, 0, 2, sr);
+            out.push(s);
+        }
+
+        // The tail (last 1024 samples) must maintain self-oscillation
+        let tail = &out[out.len() - 1024..];
+        let tail_rms = rms(tail);
+        assert!(
+            tail_rms > 0.05,
+            "4-pole OTA filter failed to sustain self-oscillation (rms: {tail_rms})"
+        );
+        for s in tail {
+            assert!(s.is_finite() && s.abs() <= 1.5);
+        }
+    }
+
+    #[test]
+    fn oxford_triple_saw_enriches_sawtooth_density() {
+        let mut engine = Engine::new(48_000.0);
+        engine.set_bank(crate::wavetable::Bank::generate(1));
+
+        let mut patch_single = Patch::default();
+        patch_single.set(P::Osc1Shape, 2.0); // Saw
+        patch_single.set(P::Osc1ShapeAmt, 0.0); // Single raw saw
+        patch_single.set(P::Osc1Level, 1.0);
+        patch_single.set(P::Cutoff, 20_000.0);
+        patch_single.set(P::Reso, 0.0);
+
+        let mut patch_triple = patch_single.clone();
+        patch_triple.set(P::Osc1ShapeAmt, 1.0); // Full Oxford Triple-Saw
+
+        let mut l1 = vec![0.0; 4096];
+        let mut r1 = vec![0.0; 4096];
+        engine.reset();
+        engine.process(
+            &patch_single,
+            &[Event::NoteOn {
+                note: 60,
+                velocity: 1.0,
+            }],
+            &mut l1,
+            &mut r1,
+        );
+
+        let mut l2 = vec![0.0; 4096];
+        let mut r2 = vec![0.0; 4096];
+        engine.reset();
+        engine.process(
+            &patch_triple,
+            &[Event::NoteOn {
+                note: 60,
+                velocity: 1.0,
+            }],
+            &mut l2,
+            &mut r2,
+        );
+
+        assert!(rms(&l1) > 0.01);
+        assert!(rms(&l2) > 0.01);
+        // Triple-saw has phase cancellation and detuning that differs from pure single saw
+        let diff: f32 = l1.iter().zip(l2.iter()).map(|(a, b)| (a - b).abs()).sum();
+        assert!(
+            diff > 10.0,
+            "Triple saw did not alter waveform: diff={diff}"
+        );
     }
 
     #[test]
