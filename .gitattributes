@@ -1,0 +1,8 @@
+# Keep every checkout byte-identical: the Windows runner would otherwise turn
+# text files into CRLF, which changes the licence shipped inside the archives.
+* text=auto eol=lf
+
+*.png binary
+*.syx binary
+*.sysex binary
+*.zip binary

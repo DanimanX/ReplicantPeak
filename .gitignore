@@ -1,0 +1,16 @@
+/target
+**/*.rs.bk
+
+# Vendor firmware is proprietary Novation content: never commit it.
+# Run scripts/fetch-firmware.sh to obtain your own copy locally.
+firmware/
+*.syx
+*.sysex
+
+# Bundled plugin artifacts
+/dist/
+
+.DS_Store
+
+# Agent session state, not part of the project
+.codewhale/

@@ -1,0 +1,21 @@
+[package]
+name = "peak-panel"
+description = "Standalone panel preview and screenshot renderer for ReplicantPeak"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "peak-panel"
+path = "src/main.rs"
+
+[dependencies]
+peak-core = { workspace = true }
+peak-ui = { workspace = true }
+crossbeam = "0.8"
+eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+egui = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png"] }

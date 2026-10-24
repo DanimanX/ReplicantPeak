@@ -1,0 +1,8 @@
+# Metadata for NIH-plug's `cargo xtask bundle <package>` bundler.
+#
+# The product name is what hosts show in their plugin list; the package name is
+# the crate. Keeping them separate lets the crate stay `peak-plugin` while the
+# plugin presents itself as ReplicantPeak.
+
+[peak-plugin]
+name = "ReplicantPeak"

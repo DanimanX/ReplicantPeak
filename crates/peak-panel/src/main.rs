@@ -1,0 +1,248 @@
+//! Standalone panel host.
+//!
+//! This runs the exact panel the plugin's editor runs, without an audio device,
+//! so the README screenshot is a render of the real UI rather than a mockup.
+//!
+//! * `peak-panel` — open the panel.
+//! * `PEAK_PANEL_SHOT=assets/panel.png peak-panel` — render once and exit.
+//! * `PEAK_FIRMWARE=/path/to/peak-firmware.syx` — link an image on startup
+//!   (otherwise the gate is shown, which is what a first run looks like).
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use crossbeam::channel::{bounded, Receiver, Sender};
+use eframe::egui;
+use peak_core::{Bank, LinkedFirmware, Patch, P};
+use peak_ui::{FirmwareStamp, LinkStatus, PanelHost, PanelState};
+
+fn main() {
+    let shot = std::env::var("PEAK_PANEL_SHOT").ok().map(PathBuf::from);
+    let delay_ms: u64 = std::env::var("PEAK_PANEL_SHOT_DELAY_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(900);
+
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([peak_ui::PANEL_W, peak_ui::PANEL_H])
+            .with_title("ReplicantPeak"),
+        ..Default::default()
+    };
+
+    if let Err(error) = eframe::run_native(
+        "peak-panel",
+        options,
+        Box::new(move |cc| {
+            peak_ui::panel::install_style(&cc.egui_ctx);
+            Ok(Box::new(Preview::new(shot, delay_ms)))
+        }),
+    ) {
+        eprintln!("peak-panel: {error}");
+        std::process::exit(1);
+    }
+}
+
+struct Preview {
+    patch: Patch,
+    panel: PanelState,
+    firmware: Option<FirmwareStamp>,
+    status: LinkStatus,
+    bank: Option<Arc<Bank>>,
+    tx: Sender<Result<LinkedFirmware, String>>,
+    rx: Receiver<Result<LinkedFirmware, String>>,
+    shot: Option<PathBuf>,
+    delay: Duration,
+    started: Instant,
+    shot_requested: bool,
+}
+
+impl Preview {
+    fn new(shot: Option<PathBuf>, delay_ms: u64) -> Self {
+        let (tx, rx) = bounded(4);
+        let mut preview = Self {
+            patch: Patch::default(),
+            panel: PanelState::new(),
+            firmware: None,
+            status: LinkStatus::Idle,
+            bank: None,
+            tx,
+            rx,
+            shot,
+            delay: Duration::from_millis(delay_ms),
+            started: Instant::now(),
+            shot_requested: false,
+        };
+
+        if let Ok(path) = std::env::var("PEAK_FIRMWARE") {
+            preview.link_path(&path);
+        } else {
+            let default = PathBuf::from("../firmware/peak-firmware-2.2-build2108.syx");
+            if default.exists() {
+                preview.link_path(&default.to_string_lossy());
+            }
+        }
+        preview
+    }
+
+    fn poll_link(&mut self) {
+        while let Ok(result) = self.rx.try_recv() {
+            match result {
+                Ok(linked) => {
+                    self.firmware = Some(FirmwareStamp::from_image(
+                        &linked.image,
+                        linked.path.clone(),
+                    ));
+                    self.bank = Some(linked.bank);
+                    self.status = LinkStatus::Idle;
+                }
+                Err(error) => self.status = LinkStatus::Failed(error),
+            }
+        }
+    }
+
+    fn maybe_screenshot(&mut self, ctx: &egui::Context) {
+        let Some(path) = self.shot.clone() else {
+            return;
+        };
+        if self.shot_requested || self.started.elapsed() < self.delay {
+            return;
+        }
+        self.shot_requested = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+        // The image arrives as an event on a later frame.
+        let _ = path;
+    }
+}
+
+impl PanelHost for Preview {
+    fn value(&self, param: P) -> f32 {
+        self.patch.get(param)
+    }
+
+    fn set(&mut self, param: P, value: f32) {
+        self.patch.set(param, value);
+    }
+
+    fn firmware(&self) -> Option<FirmwareStamp> {
+        self.firmware.clone()
+    }
+
+    fn link_status(&self) -> LinkStatus {
+        self.status.clone()
+    }
+
+    fn link_path(&mut self, path: &str) {
+        let tx = self.tx.clone();
+        self.status = LinkStatus::Working;
+        let path = path.to_string();
+        std::thread::spawn(move || {
+            let result = match std::fs::read(&path) {
+                Err(error) => Err(format!("{path}: {error}")),
+                Ok(bytes) => peak_core::link_firmware(&bytes, Some(path.clone()))
+                    .map_err(|error| error.to_string()),
+            };
+            let _ = tx.try_send(result);
+        });
+    }
+
+    fn link_bytes(&mut self, name: &str, bytes: &[u8]) {
+        let tx = self.tx.clone();
+        self.status = LinkStatus::Working;
+        let name = name.to_string();
+        let bytes = bytes.to_vec();
+        std::thread::spawn(move || {
+            let result =
+                peak_core::link_firmware(&bytes, Some(name)).map_err(|error| error.to_string());
+            let _ = tx.try_send(result);
+        });
+    }
+
+    fn scope_wave(&self) -> Vec<f32> {
+        let Some(bank) = &self.bank else {
+            return Vec::new();
+        };
+        let shape = self.patch.get(P::Osc1Shape);
+        let a = (shape.floor() as usize).min(peak_core::wavetable::TABLES - 1);
+        let b = (a + 1).min(peak_core::wavetable::TABLES - 1);
+        let morph = shape - a as f32;
+        let samples = 128;
+        (0..samples)
+            .map(|i| bank.sample_morph(a, b, morph, 0, i as f32 / samples as f32))
+            .collect()
+    }
+
+    fn active_voices(&self) -> usize {
+        // No audio device here: the panel is a preview, not a synth instance.
+        0
+    }
+
+    fn max_voices(&self) -> usize {
+        self.patch.get(P::Polyphony).round() as usize
+    }
+
+    fn preset_name(&self) -> String {
+        self.patch.name.clone()
+    }
+
+    fn set_preset_name(&mut self, name: String) {
+        self.patch.name = name;
+    }
+
+    fn is_live(&self) -> bool {
+        false
+    }
+}
+
+impl eframe::App for Preview {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_link();
+
+        let frame = egui::Frame::NONE.fill(peak_ui::theme::BG);
+        egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
+            // The panel needs `self` as the host and its own scratch state at
+            // the same time, so the state is swapped out for the frame.
+            let mut panel = std::mem::take(&mut self.panel);
+            peak_ui::panel::show(ui, self, &mut panel);
+            self.panel = panel;
+        });
+
+        self.maybe_screenshot(ctx);
+
+        // Save the screenshot the frame after it was requested.
+        let shots: Vec<_> = ctx.input(|input| {
+            input
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                    _ => None,
+                })
+                .collect()
+        });
+        for image in shots {
+            let (width, height) = (image.width() as u32, image.height() as u32);
+            let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+            for pixel in image.pixels.iter() {
+                rgba.extend_from_slice(&[pixel.r(), pixel.g(), pixel.b(), pixel.a()]);
+            }
+            if let Some(path) = &self.shot {
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                match image::save_buffer(path, &rgba, width, height, image::ColorType::Rgba8) {
+                    Ok(()) => eprintln!("saved {} ({width}x{height})", path.display()),
+                    Err(error) => eprintln!("could not save {}: {error}", path.display()),
+                }
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+
+        if self.status == LinkStatus::Working || self.shot.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(16));
+        } else {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+    }
+}

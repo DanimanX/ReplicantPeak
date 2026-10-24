@@ -1,0 +1,3 @@
+# `cargo xtask <task>` runs the workspace's own tooling (see xtask/).
+[alias]
+xtask = "run --package xtask --release --"

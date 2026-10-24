@@ -1,0 +1,34 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/peak-core",
+    "crates/peak-ui",
+    "crates/peak-plugin",
+    "crates/peak-panel",
+    "xtask",
+]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+authors = ["DanimanX"]
+repository = "https://github.com/DanimanX/ReplicantPeak"
+
+[workspace.dependencies]
+peak-core = { path = "crates/peak-core" }
+peak-ui = { path = "crates/peak-ui" }
+egui = "0.31"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+# Audio code is unusable when it is slow, so keep the DSP path optimized even in
+# development builds.
+[profile.dev.package.peak-core]
+opt-level = 2

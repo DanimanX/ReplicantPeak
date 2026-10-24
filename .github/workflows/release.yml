@@ -1,0 +1,124 @@
+name: Release
+
+# Builds the plugin on every supported OS and attaches one archive per plugin
+# format to the release for the triggering tag.
+#
+# NIH-plug can export VST3 and CLAP only; it has no Audio Unit wrapper, so no
+# macOS AU component is produced. See the "Plugin formats" section of the
+# README before adding an `au` leg to the matrix below.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to attach the bundles to
+        required: true
+        default: v1.0.0
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install panel build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libx11-dev libx11-xcb-dev libxcb1-dev libgl1-mesa-dev
+
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  bundle:
+    name: bundle (${{ matrix.name }})
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux
+          - os: windows-latest
+            name: windows
+          - os: macos-latest
+            name: macos
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install panel build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libx11-dev libx11-xcb-dev libxcb1-dev libgl1-mesa-dev
+
+      - name: Build bundles
+        run: cargo xtask bundle peak-plugin --release
+
+      - name: Package per-format archives
+        shell: bash
+        run: |
+          py="$(command -v python3 || command -v python)"
+          "$py" scripts/package-bundles.py \
+            --bundled target/bundled \
+            --out dist \
+            --os "${{ matrix.name }}" \
+            --version "${RELEASE_TAG#v}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ReplicantPeak-${{ matrix.name }}
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Attach assets to ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+    needs: bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: ReplicantPeak-*
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -l dist
+
+      # Updates the existing release instead of replacing it, so the notes
+      # written by hand stay in place; only the archives are (re)uploaded.
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+          files: dist/*.zip
+          fail_on_unmatched_files: true
