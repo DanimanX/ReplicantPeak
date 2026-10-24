@@ -237,6 +237,7 @@ fn mmio_hook(
 }
 
 /// Code hook for instruction count, timer ticks, and stepping.
+#[allow(clippy::manual_is_multiple_of)]
 fn code_hook(uc: &mut Unicorn<'_, CpuContext>, _address: u64, _size: u32) {
     let ctx = uc.get_data_mut();
     ctx.instructions_executed += 1;

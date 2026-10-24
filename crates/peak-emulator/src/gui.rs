@@ -142,7 +142,8 @@ impl EmulatorApp {
         let rect = Rect::from_min_size(panel_rect.min, Vec2::new(panel_rect.width(), height));
 
         // 1. Panel Background (Peak textured brushed dark metal)
-        ui.painter().rect_filled(rect, 4.0_f32, Color32::from_rgb(18, 20, 24));
+        ui.painter()
+            .rect_filled(rect, 4.0_f32, Color32::from_rgb(18, 20, 24));
         ui.painter().rect_stroke(
             rect,
             4.0_f32,
@@ -152,7 +153,8 @@ impl EmulatorApp {
 
         // Header strip
         let header_rect = Rect::from_min_size(rect.min, Vec2::new(rect.width(), 26.0_f32));
-        ui.painter().rect_filled(header_rect, 4.0_f32, Color32::from_rgb(26, 30, 36));
+        ui.painter()
+            .rect_filled(header_rect, 4.0_f32, Color32::from_rgb(26, 30, 36));
         ui.painter().text(
             Pos2::new(header_rect.left() + 14.0_f32, header_rect.center().y),
             egui::Align2::LEFT_CENTER,
@@ -171,7 +173,8 @@ impl EmulatorApp {
 
         // Screen Bezel & Recessed Housing
         let bezel_rect = oled_rect.expand(6.0_f32);
-        ui.painter().rect_filled(bezel_rect, 3.0_f32, Color32::from_rgb(8, 10, 12));
+        ui.painter()
+            .rect_filled(bezel_rect, 3.0_f32, Color32::from_rgb(8, 10, 12));
         ui.painter().rect_stroke(
             bezel_rect,
             3.0_f32,
@@ -180,14 +183,18 @@ impl EmulatorApp {
         );
 
         // Render OLED Display Pixels
-        ui.painter().rect_filled(oled_rect, 0.0_f32, Color32::from_rgb(2, 6, 8));
+        ui.painter()
+            .rect_filled(oled_rect, 0.0_f32, Color32::from_rgb(2, 6, 8));
         self.render_oled_pixels(ui.painter(), oled_rect);
 
         // Scanlines overlay for authentic retro look
         for y_step in (0..(oled_h as usize)).step_by(4) {
             let y = oled_rect.top() + y_step as f32;
             ui.painter().line_segment(
-                [Pos2::new(oled_rect.left(), y), Pos2::new(oled_rect.right(), y)],
+                [
+                    Pos2::new(oled_rect.left(), y),
+                    Pos2::new(oled_rect.right(), y),
+                ],
                 Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(0, 0, 0, 35)),
             );
         }
@@ -206,7 +213,8 @@ impl EmulatorApp {
         let btn_labels = ["< PAGE", "PAGE >", "PATCH", "EXIT", "INIT", "COMPARE"];
         let mut btn_x = oled_rect.left();
         for label in btn_labels {
-            let btn_rect = Rect::from_min_size(Pos2::new(btn_x, buttons_y), Vec2::new(76.0_f32, 24.0_f32));
+            let btn_rect =
+                Rect::from_min_size(Pos2::new(btn_x, buttons_y), Vec2::new(76.0_f32, 24.0_f32));
             let response = ui.allocate_rect(btn_rect, egui::Sense::click());
             let is_hovered = response.hovered();
             let is_clicked = response.clicked();
@@ -231,7 +239,11 @@ impl EmulatorApp {
                 egui::Align2::CENTER_CENTER,
                 label,
                 FontId::monospace(9.5_f32),
-                if is_clicked { Color32::BLACK } else { Color32::from_rgb(200, 215, 230) },
+                if is_clicked {
+                    Color32::BLACK
+                } else {
+                    Color32::from_rgb(200, 215, 230)
+                },
             );
 
             if is_clicked {
@@ -279,14 +291,25 @@ impl EmulatorApp {
         for voice_idx in 0..8 {
             let col = voice_idx % 4;
             let row = voice_idx / 4;
-            let center = Pos2::new(start_x + col as f32 * x_pitch, start_y + row as f32 * y_pitch);
+            let center = Pos2::new(
+                start_x + col as f32 * x_pitch,
+                start_y + row as f32 * y_pitch,
+            );
             let is_lit = self.voice_leds[voice_idx];
 
             painter.circle_filled(center, led_radius + 2.0_f32, Color32::from_rgb(30, 36, 42));
-            painter.circle_stroke(center, led_radius + 2.0_f32, Stroke::new(1.0_f32, Color32::from_rgb(60, 70, 80)));
+            painter.circle_stroke(
+                center,
+                led_radius + 2.0_f32,
+                Stroke::new(1.0_f32, Color32::from_rgb(60, 70, 80)),
+            );
 
             if is_lit {
-                painter.circle_filled(center, led_radius + 5.0_f32, Color32::from_rgba_premultiplied(0, 220, 255, 60));
+                painter.circle_filled(
+                    center,
+                    led_radius + 5.0_f32,
+                    Color32::from_rgba_premultiplied(0, 220, 255, 60),
+                );
                 painter.circle_filled(center, led_radius, Color32::from_rgb(100, 240, 255));
                 painter.circle_filled(center, led_radius * 0.45_f32, Color32::WHITE);
             } else {
@@ -298,7 +321,11 @@ impl EmulatorApp {
                 egui::Align2::CENTER_TOP,
                 format!("{}", voice_idx + 1),
                 FontId::monospace(8.5_f32),
-                if is_lit { Color32::from_rgb(0, 220, 255) } else { Color32::from_rgb(90, 105, 120) },
+                if is_lit {
+                    Color32::from_rgb(0, 220, 255)
+                } else {
+                    Color32::from_rgb(90, 105, 120)
+                },
             );
         }
     }
@@ -326,9 +353,21 @@ impl EmulatorApp {
         );
 
         let items = [
-            ("ANIMATE 1", self.animate1_led, Color32::from_rgb(255, 80, 80)),
-            ("ANIMATE 2", self.animate2_led, Color32::from_rgb(255, 80, 80)),
-            ("FILTER 24dB", self.filter_24db_led, Color32::from_rgb(255, 200, 0)),
+            (
+                "ANIMATE 1",
+                self.animate1_led,
+                Color32::from_rgb(255, 80, 80),
+            ),
+            (
+                "ANIMATE 2",
+                self.animate2_led,
+                Color32::from_rgb(255, 80, 80),
+            ),
+            (
+                "FILTER 24dB",
+                self.filter_24db_led,
+                Color32::from_rgb(255, 200, 0),
+            ),
             ("ARP ON", self.running, Color32::from_rgb(0, 255, 120)),
         ];
 
@@ -336,10 +375,18 @@ impl EmulatorApp {
         for (label, active, color) in items {
             let led_center = Pos2::new(block_rect.left() + 20.0_f32, y);
             painter.circle_filled(led_center, 6.0_f32, Color32::from_rgb(25, 30, 35));
-            painter.circle_stroke(led_center, 6.0_f32, Stroke::new(1.0_f32, Color32::from_rgb(55, 65, 75)));
+            painter.circle_stroke(
+                led_center,
+                6.0_f32,
+                Stroke::new(1.0_f32, Color32::from_rgb(55, 65, 75)),
+            );
 
             if active {
-                painter.circle_filled(led_center, 9.0_f32, Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 60));
+                painter.circle_filled(
+                    led_center,
+                    9.0_f32,
+                    Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 60),
+                );
                 painter.circle_filled(led_center, 4.5_f32, color);
             } else {
                 painter.circle_filled(led_center, 4.5_f32, Color32::from_rgb(30, 25, 25));
@@ -350,7 +397,11 @@ impl EmulatorApp {
                 egui::Align2::LEFT_CENTER,
                 label,
                 FontId::monospace(9.0_f32),
-                if active { Color32::WHITE } else { Color32::from_rgb(110, 120, 130) },
+                if active {
+                    Color32::WHITE
+                } else {
+                    Color32::from_rgb(110, 120, 130)
+                },
             );
 
             y += 22.0_f32;
@@ -380,7 +431,8 @@ impl EmulatorApp {
                         if val > 16 {
                             let px = oled_rect.left() + x as f32 * pixel_w;
                             let py = oled_rect.top() + y as f32 * pixel_h;
-                            let rect = Rect::from_min_size(Pos2::new(px, py), Vec2::new(pixel_w, pixel_h));
+                            let rect =
+                                Rect::from_min_size(Pos2::new(px, py), Vec2::new(pixel_w, pixel_h));
 
                             let alpha = val as f32 / 255.0_f32;
                             let color = Color32::from_rgba_premultiplied(
@@ -405,7 +457,10 @@ impl EmulatorApp {
                 ui.separator();
 
                 let play_label = if self.running { "⏸ PAUSE" } else { "▶ RUN" };
-                if ui.button(egui::RichText::new(play_label).strong()).clicked() {
+                if ui
+                    .button(egui::RichText::new(play_label).strong())
+                    .clicked()
+                {
                     self.running = !self.running;
                 }
 
@@ -435,7 +490,10 @@ impl EmulatorApp {
             });
 
             if let Some(err) = &self.error_msg {
-                ui.colored_label(Color32::from_rgb(255, 80, 80), format!("Execution fault: {err}"));
+                ui.colored_label(
+                    Color32::from_rgb(255, 80, 80),
+                    format!("Execution fault: {err}"),
+                );
             }
         });
     }
@@ -444,12 +502,17 @@ impl EmulatorApp {
     fn draw_registers_view(&self, ui: &mut egui::Ui) {
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                ui.heading(egui::RichText::new("CPU REGISTERS & STATE").font(FontId::monospace(12.0_f32)));
+                ui.heading(
+                    egui::RichText::new("CPU REGISTERS & STATE").font(FontId::monospace(12.0_f32)),
+                );
                 if let Some(emu) = &self.emulator {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            egui::RichText::new(format!("Instructions: {}", emu.get_instructions_count()))
-                                .color(Color32::from_rgb(0, 220, 255)),
+                            egui::RichText::new(format!(
+                                "Instructions: {}",
+                                emu.get_instructions_count()
+                            ))
+                            .color(Color32::from_rgb(0, 220, 255)),
                         );
                     });
                 }
@@ -470,7 +533,10 @@ impl EmulatorApp {
     /// Serial UART output console.
     fn draw_uart_console(&self, ui: &mut egui::Ui) {
         ui.group(|ui| {
-            ui.heading(egui::RichText::new("UART SERIAL CONSOLE (USART6 / UART4)").font(FontId::monospace(12.0_f32)));
+            ui.heading(
+                egui::RichText::new("UART SERIAL CONSOLE (USART6 / UART4)")
+                    .font(FontId::monospace(12.0_f32)),
+            );
 
             let text = if let Some(emu) = &self.emulator {
                 let log_bytes: Option<Vec<u8>> = {
@@ -487,7 +553,8 @@ impl EmulatorApp {
             };
 
             let display_text = if text.is_empty() {
-                "[No UART transmission yet. Start CPU execution to observe serial output.]".to_string()
+                "[No UART transmission yet. Start CPU execution to observe serial output.]"
+                    .to_string()
             } else {
                 text
             };
@@ -509,7 +576,9 @@ impl EmulatorApp {
     /// MMIO Transaction Log.
     fn draw_mmio_log(&self, ui: &mut egui::Ui) {
         ui.group(|ui| {
-            ui.heading(egui::RichText::new("MMIO BUS ACTIVITY LOG").font(FontId::monospace(12.0_f32)));
+            ui.heading(
+                egui::RichText::new("MMIO BUS ACTIVITY LOG").font(FontId::monospace(12.0_f32)),
+            );
 
             let entries = if let Some(emu) = &self.emulator {
                 let log_arc = Arc::clone(&emu.context().mmio.access_log);
@@ -534,7 +603,10 @@ impl EmulatorApp {
                             ui.colored_label(op_color, op);
                             ui.monospace(format!(
                                 "[{:8}] 0x{:08X} ({}b) = 0x{:08X}",
-                                entry.peripheral, entry.address, entry.size * 8, entry.value
+                                entry.peripheral,
+                                entry.address,
+                                entry.size * 8,
+                                entry.value
                             ));
                         });
                     }

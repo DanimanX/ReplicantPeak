@@ -79,21 +79,60 @@ impl MmioBus {
     /// Read an MMIO register at the specified address.
     pub fn read(&mut self, address: u64, size: usize) -> u32 {
         let (val, name) = match address {
-            0x4002_3800..=0x4002_3BFF => (self.rcc.read((address - 0x4002_3800) as u32, size), "RCC"),
-            0x4000_7000..=0x4000_73FF => (self.pwr.read((address - 0x4000_7000) as u32, size), "PWR"),
-            0x4000_4C00..=0x4000_4FFF => (self.uart4.read((address - 0x4000_4C00) as u32, size), "UART4"),
-            0x4001_1400..=0x4001_17FF => (self.usart6.read((address - 0x4001_1400) as u32, size), "USART6"),
-            0x4001_1000..=0x4001_13FF => (self.usart6.read((address - 0x4001_1000) as u32, size), "USART1"),
-            0x4002_0000..=0x4002_03FF => (self.gpioa.read((address - 0x4002_0000) as u32, size), "GPIOA"),
-            0x4002_0400..=0x4002_07FF => (self.gpiob.read((address - 0x4002_0400) as u32, size), "GPIOB"),
-            0x4002_0800..=0x4002_0BFF => (self.gpioc.read((address - 0x4002_0800) as u32, size), "GPIOC"),
-            0x4002_0C00..=0x4002_0FFF => (self.gpiod.read((address - 0x4002_0C00) as u32, size), "GPIOD"),
-            0x4002_1000..=0x4002_13FF => (self.gpioe.read((address - 0x4002_1000) as u32, size), "GPIOE"),
-            0x4000_3800..=0x4000_3BFF => (self.spi2.read((address - 0x4000_3800) as u32, size), "SPI2"),
-            0x4000_3C00..=0x4000_3FFF => (self.spi3.read((address - 0x4000_3C00) as u32, size), "SPI3"),
-            0x4001_3000..=0x4001_33FF => (self.spi1.read((address - 0x4001_3000) as u32, size), "SPI1"),
-            0x4001_3400..=0x4001_37FF => (self.spi4.read((address - 0x4001_3400) as u32, size), "SPI4"),
-            0xE000_E010..=0xE000_E01F => (self.systick.read((address - 0xE000_E010) as u32, size), "SysTick"),
+            0x4002_3800..=0x4002_3BFF => {
+                (self.rcc.read((address - 0x4002_3800) as u32, size), "RCC")
+            }
+            0x4000_7000..=0x4000_73FF => {
+                (self.pwr.read((address - 0x4000_7000) as u32, size), "PWR")
+            }
+            0x4000_4C00..=0x4000_4FFF => (
+                self.uart4.read((address - 0x4000_4C00) as u32, size),
+                "UART4",
+            ),
+            0x4001_1400..=0x4001_17FF => (
+                self.usart6.read((address - 0x4001_1400) as u32, size),
+                "USART6",
+            ),
+            0x4001_1000..=0x4001_13FF => (
+                self.usart6.read((address - 0x4001_1000) as u32, size),
+                "USART1",
+            ),
+            0x4002_0000..=0x4002_03FF => (
+                self.gpioa.read((address - 0x4002_0000) as u32, size),
+                "GPIOA",
+            ),
+            0x4002_0400..=0x4002_07FF => (
+                self.gpiob.read((address - 0x4002_0400) as u32, size),
+                "GPIOB",
+            ),
+            0x4002_0800..=0x4002_0BFF => (
+                self.gpioc.read((address - 0x4002_0800) as u32, size),
+                "GPIOC",
+            ),
+            0x4002_0C00..=0x4002_0FFF => (
+                self.gpiod.read((address - 0x4002_0C00) as u32, size),
+                "GPIOD",
+            ),
+            0x4002_1000..=0x4002_13FF => (
+                self.gpioe.read((address - 0x4002_1000) as u32, size),
+                "GPIOE",
+            ),
+            0x4000_3800..=0x4000_3BFF => {
+                (self.spi2.read((address - 0x4000_3800) as u32, size), "SPI2")
+            }
+            0x4000_3C00..=0x4000_3FFF => {
+                (self.spi3.read((address - 0x4000_3C00) as u32, size), "SPI3")
+            }
+            0x4001_3000..=0x4001_33FF => {
+                (self.spi1.read((address - 0x4001_3000) as u32, size), "SPI1")
+            }
+            0x4001_3400..=0x4001_37FF => {
+                (self.spi4.read((address - 0x4001_3400) as u32, size), "SPI4")
+            }
+            0xE000_E010..=0xE000_E01F => (
+                self.systick.read((address - 0xE000_E010) as u32, size),
+                "SysTick",
+            ),
             0xE000_ED00..=0xE000_ED8F => {
                 // System Control Block (e.g. VTOR at 0xE000ED08)
                 let val = *self.fallback_regs.get(&address).unwrap_or(&0x0800_0000);
@@ -123,35 +162,43 @@ impl MmioBus {
                 "PWR"
             }
             0x4000_4C00..=0x4000_4FFF => {
-                self.uart4.write((address - 0x4000_4C00) as u32, size, value);
+                self.uart4
+                    .write((address - 0x4000_4C00) as u32, size, value);
                 "UART4"
             }
             0x4001_1400..=0x4001_17FF => {
-                self.usart6.write((address - 0x4001_1400) as u32, size, value);
+                self.usart6
+                    .write((address - 0x4001_1400) as u32, size, value);
                 "USART6"
             }
             0x4001_1000..=0x4001_13FF => {
-                self.usart6.write((address - 0x4001_1000) as u32, size, value);
+                self.usart6
+                    .write((address - 0x4001_1000) as u32, size, value);
                 "USART1"
             }
             0x4002_0000..=0x4002_03FF => {
-                self.gpioa.write((address - 0x4002_0000) as u32, size, value);
+                self.gpioa
+                    .write((address - 0x4002_0000) as u32, size, value);
                 "GPIOA"
             }
             0x4002_0400..=0x4002_07FF => {
-                self.gpiob.write((address - 0x4002_0400) as u32, size, value);
+                self.gpiob
+                    .write((address - 0x4002_0400) as u32, size, value);
                 "GPIOB"
             }
             0x4002_0800..=0x4002_0BFF => {
-                self.gpioc.write((address - 0x4002_0800) as u32, size, value);
+                self.gpioc
+                    .write((address - 0x4002_0800) as u32, size, value);
                 "GPIOC"
             }
             0x4002_0C00..=0x4002_0FFF => {
-                self.gpiod.write((address - 0x4002_0C00) as u32, size, value);
+                self.gpiod
+                    .write((address - 0x4002_0C00) as u32, size, value);
                 "GPIOD"
             }
             0x4002_1000..=0x4002_13FF => {
-                self.gpioe.write((address - 0x4002_1000) as u32, size, value);
+                self.gpioe
+                    .write((address - 0x4002_1000) as u32, size, value);
                 "GPIOE"
             }
             0x4000_3800..=0x4000_3BFF => {
@@ -171,7 +218,8 @@ impl MmioBus {
                 "SPI4"
             }
             0xE000_E010..=0xE000_E01F => {
-                self.systick.write((address - 0xE000_E010) as u32, size, value);
+                self.systick
+                    .write((address - 0xE000_E010) as u32, size, value);
                 "SysTick"
             }
             _ => {
@@ -185,7 +233,14 @@ impl MmioBus {
         }
     }
 
-    fn record_log(&self, is_write: bool, address: u64, size: usize, value: u32, peripheral: &'static str) {
+    fn record_log(
+        &self,
+        is_write: bool,
+        address: u64,
+        size: usize,
+        value: u32,
+        peripheral: &'static str,
+    ) {
         if let Ok(mut log) = self.access_log.lock() {
             if log.len() >= 500 {
                 log.remove(0);

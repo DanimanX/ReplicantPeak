@@ -1108,7 +1108,11 @@ fn voice_section(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut PanelState, 
         let is_lit = v < active_count;
         // Outer metallic bezel
         painter.circle_filled(center, 4.5_f32, PANEL_LO);
-        painter.circle_stroke(center, 4.5_f32, Stroke::new(1.0_f32, with_alpha(EDGE_HI, 0.8_f32)));
+        painter.circle_stroke(
+            center,
+            4.5_f32,
+            Stroke::new(1.0_f32, with_alpha(EDGE_HI, 0.8_f32)),
+        );
         if is_lit {
             painter.circle_filled(center, 6.5_f32, with_alpha(CYAN, 0.35_f32));
             painter.circle_filled(center, 3.2_f32, CYAN);

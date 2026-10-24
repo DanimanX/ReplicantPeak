@@ -19,7 +19,7 @@ impl Default for SysTickDevice {
 impl SysTickDevice {
     pub fn new() -> Self {
         Self {
-            ctrl: 0x07, // ENABLE, TICKINT, CLKSOURCE
+            ctrl: 0x07,    // ENABLE, TICKINT, CLKSOURCE
             load: 168_000, // 1 ms @ 168 MHz
             val: 0,
             calib: 168_000,

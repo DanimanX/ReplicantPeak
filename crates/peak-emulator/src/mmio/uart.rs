@@ -80,7 +80,8 @@ impl MmioDevice for UartDevice {
                     log.push(byte);
                 }
                 if self.print_stdout {
-                    let char_out = if byte == b'\r' || byte == b'\n' || (0x20..0x7F).contains(&byte) {
+                    let char_out = if byte == b'\r' || byte == b'\n' || (0x20..0x7F).contains(&byte)
+                    {
                         byte as char
                     } else {
                         '.'

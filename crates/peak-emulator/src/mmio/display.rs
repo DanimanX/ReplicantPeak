@@ -65,8 +65,8 @@ impl OledDisplay {
                 cmds.push(byte);
             }
             match byte {
-                0xAE => {} // Display OFF
-                0xAF => {} // Display ON
+                0xAE => {}            // Display OFF
+                0xAF => {}            // Display ON
                 0x15 => self.col = 0, // Set column address
                 0x75 => self.row = 0, // Set row address
                 _ => {}
@@ -82,7 +82,8 @@ impl OledDisplay {
                     // Update pixel intensity
                     for b in 0..8 {
                         let bit_on = (byte & (1 << (7 - b))) != 0;
-                        let pixel_idx = ((self.row + b) % DISPLAY_HEIGHT) * DISPLAY_WIDTH + (self.col % DISPLAY_WIDTH);
+                        let pixel_idx = ((self.row + b) % DISPLAY_HEIGHT) * DISPLAY_WIDTH
+                            + (self.col % DISPLAY_WIDTH);
                         if pixel_idx < p.len() {
                             p[pixel_idx] = if bit_on { 255 } else { 0 };
                         }
@@ -152,8 +153,7 @@ fn draw_string_5x7(pixels: &mut [u8], start_x: usize, start_y: usize, text: &str
             break;
         }
         let glyph = get_glyph_5x7(ch);
-        for col in 0..5 {
-            let col_bits = glyph[col];
+        for (col, &col_bits) in glyph.iter().enumerate() {
             for row in 0..7 {
                 let on = (col_bits & (1 << row)) != 0;
                 let px = x + col;

@@ -40,7 +40,10 @@ impl FirmwareBinary {
     /// Load from memory bytes (.syx SysEx or raw .bin).
     pub fn from_bytes(bytes: &[u8]) -> io::Result<Self> {
         if bytes.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Firmware file is empty"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Firmware file is empty",
+            ));
         }
 
         let raw = if bytes[0] == 0xF0 {
@@ -51,7 +54,10 @@ impl FirmwareBinary {
         };
 
         if raw.len() < 32 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Binary too short"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Binary too short",
+            ));
         }
 
         // For Novation Peak:
@@ -87,7 +93,10 @@ pub fn unpack_sysex(data: &[u8]) -> io::Result<Vec<u8>> {
     }
 
     if msgs.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "No valid SysEx messages found"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "No valid SysEx messages found",
+        ));
     }
 
     let mut binary = Vec::with_capacity(256 * 1024);
@@ -109,7 +118,10 @@ pub fn unpack_sysex(data: &[u8]) -> io::Result<Vec<u8>> {
     }
 
     if binary.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "No firmware payload found in SysEx"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "No firmware payload found in SysEx",
+        ));
     }
 
     Ok(binary)

@@ -7,7 +7,10 @@ use peak_emulator::loader::FirmwareBinary;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "emulate", about = "Novation Peak ARM Cortex-M Microcontroller Emulator")]
+#[command(
+    name = "emulate",
+    about = "Novation Peak ARM Cortex-M Microcontroller Emulator"
+)]
 struct Args {
     /// Path to Novation Peak firmware (.syx or raw .bin)
     #[arg(default_value = "firmware/peak-firmware-2.2-build2108.syx")]
@@ -36,7 +39,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading firmware from: {}", args.firmware.display());
 
     let binary = FirmwareBinary::from_file(&args.firmware)?;
-    println!("Unpacked payload size: {} bytes ({:.1} KB)", binary.data.len(), binary.data.len() as f32 / 1024.0);
+    println!(
+        "Unpacked payload size: {} bytes ({:.1} KB)",
+        binary.data.len(),
+        binary.data.len() as f32 / 1024.0
+    );
     println!("Mapped Base Address:   0x{:08X}", binary.base_addr);
     println!("Reset Entry Point:     0x{:08X}", binary.entry_point);
     println!("Initial Stack Pointer: 0x{:08X}", binary.initial_sp);
@@ -50,8 +57,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\nInitializing CPU core (Unicorn ARM Thumb)...");
-    let mut emulator = Emulator::new(binary, true)
-        .map_err(|e| format!("Initialization error: {e}"))?;
+    let mut emulator =
+        Emulator::new(binary, true).map_err(|e| format!("Initialization error: {e}"))?;
 
     println!("Starting execution for {} steps...\n", args.steps);
     let start_time = std::time::Instant::now();
