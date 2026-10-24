@@ -3,6 +3,23 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [1.0.6] — 2026-10-24
+
+### Added
+
+- **Cyberpunk / Blade Runner Video Demonstration (`assets/cyberpunk_blade_runner_demo.mp4`):**
+  - Generated a 46-second Full HD (1920x1080 @ 30 fps) retro-futuristic video demonstration showcasing ReplicantPeak's synthesis engine in a Blade Runner neo-noir / Cyberpunk setting.
+  - Multi-track soundtrack composed and synthesized directly via `peak-core` (`crates/peak-core/examples/cyberpunk_demo.rs`):
+    - **CS-80 Expressive Brass Lead**: PolyBLEP Oxford Triple-Saw with 24 dB/oct resonant Chris Huggett OTA ladder filter sweep, Vangelis pitch vibrato, analog chorus, and tape echo.
+    - **Atmospheric Pad**: Authentic `TnT Sadtouch` SysEx patch with slow 1.8-second swelling attack and stereo diffusion.
+    - **Cyberpunk Analog Sub-Bass Drone**: Multi-stage diode saturation with asymmetric 2nd/4th harmonic coloration.
+    - **16th-Note Dorian Sequence Arpeggio**: Crisp plucky envelope with synchronized stereo ping-pong delay.
+  - Live animated visual telemetry:
+    - Real-time oscilloscope rendered inside the authentic 256x64 OLED display reflecting the audio waveform.
+    - Dynamic 8-Voice Activity LEDs illuminating in sync with sounding notes.
+    - 64-band neon spectrum analyzer across the bottom grid horizon.
+    - Cyberpunk telemetry HUD with real-time timecode, M4 cycle counter, and sectional track annotations.
+
 ## [1.0.5] — 2026-10-24
 
 ### Fixed & Improved

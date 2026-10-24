@@ -14,7 +14,8 @@ ARM Cortex-M4 microcontroller code via an integrated Unicorn-based hardware
 emulator that drives the authentic 256×64 OLED display panel, voice activity LEDs,
 and parameter states.
 
-- **Status**: v1.0.5, Oxford oscillator & audio-rate OTA filter update.
+- **Status**: v1.0.6, Oxford oscillator & Cyberpunk Blade Runner demo update.
+- **Demo Video**: [Cyberpunk / Blade Runner Video Demonstration](assets/cyberpunk_blade_runner_demo.mp4) (46s Full HD).
 - **License**: MIT for the code. The firmware is not included and not covered by
   that license (see [Firmware](#firmware)).
 
