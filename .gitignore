@@ -7,6 +7,10 @@ firmware/
 *.syx
 *.sysex
 
+# Allow user demo presets
+!PeakDist03/**
+!PeakDist03/*.syx
+
 # Bundled plugin artifacts
 /dist/
 

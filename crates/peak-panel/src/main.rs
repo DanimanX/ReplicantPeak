@@ -59,6 +59,8 @@ struct Preview {
     shot_requested: bool,
     presets: PresetBank,
     preset_index: usize,
+    emulator: Option<peak_emulator::Emulator>,
+    emulator_cycles: u64,
 }
 
 impl Preview {
@@ -78,6 +80,8 @@ impl Preview {
             shot_requested: false,
             presets: PresetBank::new(),
             preset_index: 0,
+            emulator: None,
+            emulator_cycles: 0,
         };
 
         if let Some(index) = std::env::var("PEAK_PANEL_PRESET")
@@ -107,6 +111,17 @@ impl Preview {
                         linked.path.clone(),
                     ));
                     self.bank = Some(linked.bank);
+                    if let Some(path) = &linked.path {
+                        if let Ok(data) = std::fs::read(path) {
+                            if let Ok(binary) = peak_emulator::FirmwareBinary::from_bytes(&data) {
+                                if let Ok(mut emu) = peak_emulator::Emulator::new(binary, false) {
+                                    let _ = emu.step(10_000);
+                                    self.emulator = Some(emu);
+                                    self.emulator_cycles = 10_000;
+                                }
+                            }
+                        }
+                    }
                     self.status = LinkStatus::Idle;
                 }
                 Err(error) => self.status = LinkStatus::Failed(error),
@@ -240,6 +255,30 @@ impl PanelHost for Preview {
 
     fn is_live(&self) -> bool {
         false
+    }
+
+    fn oled_pixels(&self) -> Option<Vec<u8>> {
+        if let Some(emu) = &self.emulator {
+            if let Ok(disp) = emu.context().mmio.display.lock() {
+                return disp.pixels.lock().ok().map(|p| p.clone());
+            }
+        }
+        None
+    }
+
+    fn emulator_status(&self) -> (bool, u64) {
+        (self.emulator.is_some(), self.emulator_cycles)
+    }
+
+    fn import_syx(&mut self, data: &[u8]) -> Result<String, String> {
+        let (name, patch) = peak_core::preset::parse_syx_patch(data)?;
+        let index = self
+            .presets
+            .store(&name, &patch)
+            .map_err(|error| error.to_string())?;
+        self.patch = patch;
+        self.preset_index = index;
+        Ok(name)
     }
 }
 

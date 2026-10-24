@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 peak-core = { workspace = true }
 peak-ui = { workspace = true }
+peak-emulator = { workspace = true }
 crossbeam = "0.8"
 eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
 egui = { workspace = true }

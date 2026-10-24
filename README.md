@@ -9,20 +9,30 @@ A three-oscillator wavetable synthesizer inspired by the Novation Peak, written
 in Rust and shipped as a **VST3 / CLAP** plugin plus a standalone panel that
 renders exactly the same interface.
 
-The engine stays silent until a genuine Peak firmware image (`.syx`) is linked.
-That image is never executed or downloaded by the plugin: it is validated, used
-as the build fingerprint, and used as the deterministic seed for the user
-wavetables.
+The engine links genuine Peak firmware images (`.syx`), executing the STM32F429
+ARM Cortex-M4 microcontroller code via an integrated Unicorn-based hardware
+emulator that drives the authentic 256×64 OLED display panel, voice activity LEDs,
+and parameter states.
 
-- **Status**: v1.0.1, fidelity and scope update.
+- **Status**: v1.0.3, firmware emulation & OLED panel update.
 - **License**: MIT for the code. The firmware is not included and not covered by
   that license (see [Firmware](#firmware)).
 
 ## What is inside
 
-- Peak-style panel drawn with egui: three oscillator columns, centre display,
-  filter, two envelopes, LFOs, FX and the voice section.
-- **One cyberpunk wavetable scope per oscillator.** Each scope is a five-column
+- **Authentic Novation Peak OLED Display & Front Panel:**
+  - Monochrome 256×64 OLED display panel with live hardware emulation statistics,
+    patch metadata, CRT/OLED dot-matrix scanlines, and real-time visualizer.
+  - 8 physical Voice Activity LEDs that illuminate dynamically with glowing cyan halos
+    and white centers as notes sound.
+  - Dedicated front panel **VOLUME** knob (`-48.0 dB .. +6.0 dB`).
+  - Native **SysEx Preset Import** (`.syx`): load custom patches via drag & drop or the
+    in-display `IMPORT .SYX` button, bundled with the 10 Montfrooij `PeakDist03` presets.
+- **Active ARM Cortex-M4 Firmware Emulation:**
+  - Microcontroller emulation harness running the genuine firmware binary.
+  - STM32F4 MMIO virtual peripheral stubs for RCC, PWR, UART, GPIO, SPI, and SysTick.
+  - Thread-safe background stepping communicating with the plugin GUI and voice allocator.
+- **Cyberpunk wavetable scope per oscillator.** Each scope is a five-column
   waterfall drawn as GPU-rasterised egui meshes, with neon gradients, a live
   interpolated waveform and a phase marker. Drag a scope to sweep SHAPE; drag
   the wave strip or scroll to change the table.

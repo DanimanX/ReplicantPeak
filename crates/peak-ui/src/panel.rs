@@ -293,13 +293,19 @@ fn preset_bar(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut PanelState, inn
         vec2(button_w, bar.height()),
     );
     let store = Rect::from_min_size(
-        pos2(bar.right() - 58.0, bar.top()),
-        vec2(58.0, bar.height()),
+        pos2(bar.right() - 52.0, bar.top()),
+        vec2(52.0, bar.height()),
+    );
+    let import_btn = Rect::from_min_size(
+        pos2(store.left() - 76.0, bar.top()),
+        vec2(72.0, bar.height()),
     );
 
     let enabled = count > 0 && host.is_live();
     let prev_clicked = widgets::neon_button(ui, prev, "<", CYAN, false).clicked();
     let next_clicked = widgets::neon_button(ui, next, ">", CYAN, false).clicked();
+    let import_clicked =
+        widgets::neon_button(ui, import_btn, "IMPORT .SYX", CYAN, state.import_syx_open).clicked();
     let store_clicked = widgets::neon_button(ui, store, "STORE", AMBER, false).clicked();
 
     if prev_clicked && enabled {
@@ -312,11 +318,63 @@ fn preset_bar(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut PanelState, inn
         host.select_preset(target);
         state.preset_msg = None;
     }
+    if import_clicked {
+        state.import_syx_open = !state.import_syx_open;
+        if state.syx_path_input.is_empty() {
+            state.syx_path_input = "PeakDist03/TnTDistCareFULL.syx".to_string();
+        }
+    }
     if store_clicked && enabled {
         state.preset_msg = Some(match host.store_preset() {
             Ok(name) => format!("STORED {name}").to_uppercase(),
             Err(error) => format!("NOT STORED: {error}").to_uppercase(),
         });
+    }
+
+    if state.import_syx_open {
+        let import_box = Rect::from_min_max(
+            pos2(inner.left(), bar.top() - 28.0),
+            pos2(inner.right(), bar.top() - 4.0),
+        );
+        ui.painter()
+            .rect_filled(import_box, egui::CornerRadius::same(2), PANEL_LO);
+        ui.painter().rect_stroke(
+            import_box,
+            egui::CornerRadius::same(2),
+            Stroke::new(1.0_f32, with_alpha(CYAN, 0.8)),
+            egui::StrokeKind::Inside,
+        );
+        let load_btn_rect = Rect::from_min_size(
+            pos2(import_box.right() - 48.0, import_box.top() + 2.0),
+            vec2(44.0, import_box.height() - 4.0),
+        );
+        let input_rect = Rect::from_min_max(
+            pos2(import_box.left() + 4.0, import_box.top() + 2.0),
+            pos2(load_btn_rect.left() - 4.0, import_box.bottom() - 2.0),
+        );
+        ui.put(
+            input_rect,
+            egui::TextEdit::singleline(&mut state.syx_path_input)
+                .font(FontId::monospace(8.5))
+                .hint_text("Path to .syx preset..."),
+        );
+        if widgets::neon_button(ui, load_btn_rect, "LOAD", CYAN, false).clicked() {
+            let path_str = state.syx_path_input.trim();
+            match std::fs::read(path_str) {
+                Ok(bytes) => match host.import_syx(&bytes) {
+                    Ok(name) => {
+                        state.preset_msg = Some(format!("IMPORTED {name}").to_uppercase());
+                        state.import_syx_open = false;
+                    }
+                    Err(err) => {
+                        state.preset_msg = Some(format!("ERR: {err}").to_uppercase());
+                    }
+                },
+                Err(e) => {
+                    state.preset_msg = Some(format!("FILE ERR: {e}").to_uppercase());
+                }
+            }
+        }
     }
 
     let counter = if count == 0 {
@@ -333,7 +391,7 @@ fn preset_bar(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut PanelState, inn
         DIM,
     );
     painter.text(
-        pos2(next.right() + 58.0, bar.center().y),
+        pos2(next.right() + 48.0, bar.center().y),
         Align2::LEFT_CENTER,
         host.preset_name().to_uppercase(),
         FontId::monospace(8.5),
@@ -845,8 +903,8 @@ fn display(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut PanelState, rect: 
 
     // Scope.
     let scope_rect = Rect::from_min_max(
-        pos2(inner.left(), inner.top() + 22.0),
-        pos2(inner.right(), inner.top() + 110.0),
+        pos2(inner.left(), inner.top() + 20.0),
+        pos2(inner.right(), inner.top() + 104.0),
     );
     painter.rect_filled(
         scope_rect,
@@ -856,8 +914,33 @@ fn display(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut PanelState, rect: 
     let wave = host.scope_wave();
     widgets::scope(painter, scope_rect.shrink2(vec2(4.0, 6.0)), &wave, CYAN);
 
+    // 8 Voice Activity LEDs directly on OLED panel
+    let leds_y = scope_rect.bottom() + 10.0;
+    let cell_w = (inner.width() - 20.0) / 8.0;
+    let active_mask = host.voice_led_mask();
+    for v in 0..8 {
+        let center = pos2(inner.left() + 10.0 + (v as f32 + 0.5) * cell_w, leds_y);
+        let is_lit = (active_mask & (1 << v)) != 0;
+        painter.circle_filled(center, 4.0, Color32::from_rgb(12, 16, 20));
+        painter.circle_stroke(center, 4.0, Stroke::new(1.0_f32, with_alpha(EDGE_HI, 0.7)));
+        if is_lit {
+            painter.circle_filled(center, 6.0, with_alpha(CYAN, 0.40));
+            painter.circle_filled(center, 3.0, CYAN);
+            painter.circle_filled(center, 1.2, Color32::WHITE);
+        } else {
+            painter.circle_filled(center, 3.0, Color32::from_rgb(8, 20, 24));
+        }
+        painter.text(
+            pos2(center.x, center.y + 6.0),
+            Align2::CENTER_TOP,
+            format!("{}", v + 1),
+            FontId::monospace(6.5),
+            if is_lit { CYAN } else { with_alpha(DIM, 0.6) },
+        );
+    }
+
     // Parameter readout.
-    let readout_y = scope_rect.bottom() + 12.0;
+    let readout_y = leds_y + 18.0;
     match engaged {
         Some(p) => {
             let spec = p.spec();
@@ -898,13 +981,22 @@ fn display(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut PanelState, rect: 
         }
     }
 
-    // Right column: firmware facts.
+    // Right column: firmware & emulation facts.
+    let (is_emu, cycles) = host.emulator_status();
     let facts_x = inner.right() - 150.0;
     let facts = match host.firmware() {
         Some(fw) => vec![
+            ("CPU", if is_emu { "CORTEX-M4" } else { "IDLE" }.to_string()),
+            (
+                "CYC",
+                if cycles > 0 {
+                    format!("{}", cycles)
+                } else {
+                    "ACTIVE".to_string()
+                },
+            ),
             ("MSG", format!("{}", fw.messages)),
             ("SIZE", format!("{:.1} KB", fw.bytes as f32 / 1024.0)),
-            ("BANK", format!("{} TABLES", peak_core::wavetable::TABLES)),
         ],
         None => vec![("STATUS", "SILENT".to_string())],
     };
@@ -1085,11 +1177,18 @@ fn draw_env_graph(
 
 fn voice_section(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut PanelState, rect: Rect) {
     let accent = accent_for(Accent::Voice);
-    let content = widgets::section(ui, rect, "VOICE", accent, None);
-    let cell = content.width() / 5.0;
-    for (i, p) in [P::Polyphony, P::Glide, P::BendRange, P::Drift, P::Diverge]
-        .iter()
-        .enumerate()
+    let content = widgets::section(ui, rect, "VOICE & MASTER", accent, None);
+    let cell = content.width() / 6.0;
+    for (i, p) in [
+        P::Polyphony,
+        P::Glide,
+        P::BendRange,
+        P::Drift,
+        P::Diverge,
+        P::Volume,
+    ]
+    .iter()
+    .enumerate()
     {
         let r = Rect::from_min_size(
             pos2(content.left() + i as f32 * cell, content.top() + 6.0),
@@ -1321,8 +1420,29 @@ fn handle_dropped_files(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut Panel
         return;
     }
     for file in dropped {
-        if let Some(bytes) = &file.bytes {
-            host.link_bytes(&file.name, bytes);
+        let bytes_opt = file
+            .bytes
+            .as_ref()
+            .map(|b| b.to_vec())
+            .or_else(|| file.path.as_ref().and_then(|p| std::fs::read(p).ok()));
+        if let Some(bytes) = bytes_opt {
+            // If it is a Novation Peak single patch SysEx dump (527 bytes, cmd 0x10)
+            if bytes.len() >= 527
+                && bytes[0] == 0xF0
+                && bytes.get(1..4) == Some(&[0x00, 0x20, 0x29])
+                && bytes.get(4..6) == Some(&[0x01, 0x10])
+            {
+                match host.import_syx(&bytes) {
+                    Ok(name) => {
+                        state.preset_msg = Some(format!("IMPORTED {name}").to_uppercase());
+                    }
+                    Err(err) => {
+                        state.preset_msg = Some(format!("IMPORT ERR: {err}").to_uppercase());
+                    }
+                }
+                continue;
+            }
+            host.link_bytes(&file.name, &bytes);
             state.link_attempted = true;
         } else if let Some(path) = &file.path {
             host.link_path(&path.to_string_lossy());

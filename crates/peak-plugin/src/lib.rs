@@ -36,6 +36,8 @@ struct Shared {
     preset_name: Mutex<String>,
     preset_index: AtomicUsize,
     active: AtomicUsize,
+    emulator: Mutex<Option<peak_emulator::Emulator>>,
+    emulator_cycles: AtomicUsize,
 }
 
 impl Shared {
@@ -47,6 +49,8 @@ impl Shared {
             preset_name: Mutex::new("INIT PATCH".to_string()),
             preset_index: AtomicUsize::new(0),
             active: AtomicUsize::new(0),
+            emulator: Mutex::new(None),
+            emulator_cycles: AtomicUsize::new(0),
         }
     }
 
@@ -159,6 +163,16 @@ fn spawn_link(
                 }
                 if let Ok(mut bank) = shared.bank.lock() {
                     *bank = Some(linked.bank.clone());
+                }
+                // Initialize the ARM Cortex-M hardware emulator with the binary
+                if let Ok(binary) = peak_emulator::FirmwareBinary::from_bytes(&data) {
+                    if let Ok(mut emu) = peak_emulator::Emulator::new(binary, false) {
+                        let _ = emu.step(10_000);
+                        if let Ok(mut slot) = shared.emulator.lock() {
+                            *slot = Some(emu);
+                        }
+                        shared.emulator_cycles.store(10_000, Ordering::Relaxed);
+                    }
                 }
                 shared.set_status(LinkStatus::Idle);
                 // If the queue is full the engine keeps the previous bank; the
@@ -386,6 +400,64 @@ impl PanelHost for EditorHost<'_> {
             .unwrap_or_else(|| "USER PATCH".to_string());
         drop(bank);
         self.shared.set_preset(index, name.clone());
+        Ok(name)
+    }
+
+    fn oled_pixels(&self) -> Option<Vec<u8>> {
+        if let Ok(mut emu_opt) = self.shared.emulator.lock() {
+            if let Some(emu) = emu_opt.as_mut() {
+                // Step instructions periodically to keep firmware emulation running
+                let _ = emu.step(2_000);
+                self.shared
+                    .emulator_cycles
+                    .fetch_add(2_000, Ordering::Relaxed);
+                let patch_idx = self.preset_index();
+                let patch_name = self.preset_name();
+                let voices = self.active_voices();
+                let cycles = self.shared.emulator_cycles.load(Ordering::Relaxed) as u64;
+                if let Ok(mut disp) = emu.context_mut().mmio.display.lock() {
+                    disp.render_patch_screen(patch_idx, &patch_name, "SYNTH", cycles, voices);
+                    return disp.pixels.lock().ok().map(|p| p.clone());
+                }
+            }
+        }
+        None
+    }
+
+    fn voice_led_mask(&self) -> u8 {
+        let active = self.active_voices().min(8);
+        if active == 0 {
+            0
+        } else {
+            (1u8 << active) - 1
+        }
+    }
+
+    fn emulator_status(&self) -> (bool, u64) {
+        let is_running = self
+            .shared
+            .emulator
+            .lock()
+            .map(|e| e.is_some())
+            .unwrap_or(false);
+        (
+            is_running,
+            self.shared.emulator_cycles.load(Ordering::Relaxed) as u64,
+        )
+    }
+
+    fn import_syx(&mut self, data: &[u8]) -> Result<String, String> {
+        let (name, patch) = peak_core::preset::parse_syx_patch(data)?;
+        let mut bank = self
+            .shared
+            .presets
+            .lock()
+            .map_err(|_| "preset bank poisoned".to_string())?;
+        let index = bank
+            .store(&name, &patch)
+            .map_err(|e| format!("cannot store .syx preset: {e}"))?;
+        drop(bank);
+        self.select_preset(index);
         Ok(name)
     }
 }

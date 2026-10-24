@@ -17,6 +17,10 @@ pub struct Emulator {
     pub binary: FirmwareBinary,
 }
 
+// Unicorn engine pointer is thread-safe as long as exclusive access is ensured via Mutex.
+unsafe impl Send for Emulator {}
+unsafe impl Sync for Emulator {}
+
 impl Emulator {
     pub fn new(binary: FirmwareBinary, print_uart: bool) -> Result<Self, String> {
         let context = CpuContext {

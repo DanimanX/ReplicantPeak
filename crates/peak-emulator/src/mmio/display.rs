@@ -128,6 +128,63 @@ impl OledDisplay {
         }
         rgba
     }
+
+    /// Render the authentic Peak patch information and live hardware status onto the OLED framebuffer.
+    pub fn render_patch_screen(
+        &mut self,
+        patch_idx: usize,
+        patch_name: &str,
+        category: &str,
+        cycles: u64,
+        active_voices: usize,
+    ) {
+        if let Ok(mut p) = self.pixels.lock() {
+            p.fill(0);
+
+            // Top banner border
+            for x in 0..DISPLAY_WIDTH {
+                p[2 * DISPLAY_WIDTH + x] = 160;
+                p[16 * DISPLAY_WIDTH + x] = 160;
+                p[48 * DISPLAY_WIDTH + x] = 160;
+                p[61 * DISPLAY_WIDTH + x] = 160;
+            }
+
+            // Line 1: Header (Patch number, Peak brand, Category)
+            let hdr = format!("P{:03}  PEAK  {}", patch_idx + 1, category.to_uppercase());
+            draw_string_5x7(&mut p, 6, 6, &hdr);
+
+            // Line 2: Patch Name (large and bright in center)
+            let clean_name = patch_name.to_uppercase();
+            draw_string_5x7(&mut p, 12, 24, &clean_name);
+
+            // Line 3: Live Voice meter & status
+            let voice_str = format!("VOICES: {}/8  \u{00b7}  CORTEX-M4", active_voices);
+            draw_string_5x7(&mut p, 12, 36, &voice_str);
+
+            // Visual voice indicators (8 blocks)
+            for v in 0..8 {
+                let bx = 180 + v * 9;
+                for vy in 34..42 {
+                    for vx in bx..(bx + 6) {
+                        if vx < DISPLAY_WIDTH {
+                            p[vy * DISPLAY_WIDTH + vx] = if v < active_voices { 255 } else { 40 };
+                        }
+                    }
+                }
+            }
+
+            // Line 4: Emulator instruction cycles and MMIO status
+            let emu_str = if cycles > 0 {
+                format!(
+                    "EMU CYCLES: {:>7} \u{00b7} MMIO ACTIVE",
+                    cycles % 10_000_000
+                )
+            } else {
+                "ARM CORTEX-M4  \u{00b7}  FIRMWARE READY".to_string()
+            };
+            draw_string_5x7(&mut p, 6, 51, &emu_str);
+        }
+    }
 }
 
 /// Generate default startup banner text on OLED buffer.

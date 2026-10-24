@@ -523,6 +523,162 @@ pub const FACTORY: &[Preset] = &[
     },
 ];
 
+pub const TNT_MOD_KEE_NOISE_SYX: &[u8] = include_bytes!("../../../PeakDist03/TnT ModKeeNoise.syx");
+pub const TNT_DIST_CAREFULL_SYX: &[u8] = include_bytes!("../../../PeakDist03/TnTDistCareFULL.syx");
+pub const TNT_DISTIL_LEAD_SYX: &[u8] = include_bytes!("../../../PeakDist03/TnTDistilLead.syx");
+pub const TNT_DISTOPADKEY_SYX: &[u8] = include_bytes!("../../../PeakDist03/TnTDistopadkey.syx");
+pub const TNT_KEY_SYNTHT_SYX: &[u8] = include_bytes!("../../../PeakDist03/TnTKeySyntht.syx");
+pub const TNT_LEADER_X_SYX: &[u8] = include_bytes!("../../../PeakDist03/TnTLeaderX.syx");
+pub const TNT_SQRD_TOUCH_SYX: &[u8] = include_bytes!("../../../PeakDist03/TnTSqrdTouch.syx");
+pub const TNT_SQUARED_SYX: &[u8] = include_bytes!("../../../PeakDist03/TnTSquared.syx");
+pub const TNT_SYNC_PAD_KRUNCH_SYX: &[u8] =
+    include_bytes!("../../../PeakDist03/TnTSyncPadKrunch.syx");
+pub const TNT_SYNCD_PAD_SYX: &[u8] = include_bytes!("../../../PeakDist03/TnTSyncdPad.syx");
+
+pub const PEAK_DIST_03_SYX_ALL: &[&[u8]] = &[
+    TNT_MOD_KEE_NOISE_SYX,
+    TNT_DIST_CAREFULL_SYX,
+    TNT_DISTIL_LEAD_SYX,
+    TNT_DISTOPADKEY_SYX,
+    TNT_KEY_SYNTHT_SYX,
+    TNT_LEADER_X_SYX,
+    TNT_SQRD_TOUCH_SYX,
+    TNT_SQUARED_SYX,
+    TNT_SYNC_PAD_KRUNCH_SYX,
+    TNT_SYNCD_PAD_SYX,
+];
+
+/// Parse a Novation Peak single patch SysEx dump (527 bytes) into a named [`Patch`].
+pub fn parse_syx_patch(data: &[u8]) -> Result<(String, Patch), String> {
+    if data.len() < 527 {
+        return Err(format!(
+            "SysEx message too short: expected 527 bytes, got {}",
+            data.len()
+        ));
+    }
+    if data[0] != 0xF0 || data[526] != 0xF7 {
+        return Err("Invalid SysEx frame: missing SOX (0xF0) or EOX (0xF7)".to_string());
+    }
+    if data[1] != 0x00 || data[2] != 0x20 || data[3] != 0x29 {
+        return Err("Not a Novation SysEx dump (manufacturer id mismatch)".to_string());
+    }
+    if data[4] != 0x01 || data[5] != 0x10 {
+        return Err(format!(
+            "Unsupported SysEx payload: product 0x{:02X}, cmd 0x{:02X}",
+            data[4], data[5]
+        ));
+    }
+
+    let raw_name = &data[16..32];
+    let name_str = String::from_utf8_lossy(raw_name).trim().to_string();
+    let name = if name_str.is_empty() {
+        "UNTITLED".to_string()
+    } else {
+        name_str
+    };
+
+    let mut patch = Patch::default();
+    patch.name = name.clone();
+
+    let get_u7 = |offset: usize| -> f32 { data.get(offset).copied().unwrap_or(0) as f32 };
+    let norm = |offset: usize| -> f32 { (get_u7(offset) / 127.0).clamp(0.0, 1.0) };
+    let bipolar = |offset: usize| -> f32 { ((get_u7(offset) - 64.0) / 64.0).clamp(-1.0, 1.0) };
+    let log_scale = |offset: usize, min_val: f32, max_val: f32| -> f32 {
+        let t = norm(offset);
+        min_val * (max_val / min_val).powf(t)
+    };
+
+    let map_wave = |shape_byte: usize, type_byte: usize| -> f32 {
+        let sh = get_u7(shape_byte) as usize;
+        let tp = get_u7(type_byte) as usize;
+        match sh {
+            0 => 0.0, // Sine
+            1 => 1.0, // Tri
+            2 => 2.0, // Saw
+            3 => 3.0, // Square
+            _ => (4 + tp % 8) as f32,
+        }
+    };
+
+    // Osc 1
+    patch.set(P::Osc1Shape, map_wave(48, 49));
+    patch.set(P::Osc1ShapeAmt, bipolar(51));
+    let o1_tune = get_u7(53) - 60.0;
+    patch.set(P::Osc1Tune, o1_tune.clamp(-24.0, 24.0));
+    let o1_fine = (get_u7(58) - 64.0) * (100.0 / 64.0);
+    patch.set(P::Osc1Fine, o1_fine.clamp(-100.0, 100.0));
+
+    // Osc 2
+    patch.set(P::Osc2Shape, map_wave(70, 71));
+    patch.set(P::Osc2ShapeAmt, bipolar(73));
+    let o2_tune = get_u7(75) - 60.0;
+    patch.set(P::Osc2Tune, o2_tune.clamp(-24.0, 24.0));
+    let o2_fine = (get_u7(80) - 64.0) * (100.0 / 64.0);
+    patch.set(P::Osc2Fine, o2_fine.clamp(-100.0, 100.0));
+
+    // Osc 3
+    patch.set(P::Osc3Shape, map_wave(91, 92));
+    patch.set(P::Osc3ShapeAmt, bipolar(94));
+    let o3_tune = get_u7(96) - 60.0;
+    patch.set(P::Osc3Tune, o3_tune.clamp(-24.0, 24.0));
+    let o3_fine = (get_u7(101) - 64.0) * (100.0 / 64.0);
+    patch.set(P::Osc3Fine, o3_fine.clamp(-100.0, 100.0));
+
+    // Mixer
+    patch.set(P::Osc1Level, norm(136));
+    patch.set(P::Osc2Level, norm(138));
+    patch.set(P::Osc3Level, norm(143));
+    patch.set(P::RingLevel, norm(139));
+    patch.set(P::NoiseLevel, norm(140));
+
+    // Filter
+    patch.set(P::Drive, norm(160));
+    patch.set(P::Cutoff, log_scale(161, 20.0, 20000.0));
+    patch.set(P::Reso, norm(162));
+    patch.set(P::FilterEnvAmt, bipolar(163));
+    patch.set(P::Keytrack, norm(164));
+    let ftype = get_u7(168).clamp(0.0, 5.0);
+    patch.set(P::FilterType, ftype);
+
+    // Amp Envelope
+    patch.set(P::AmpAttack, log_scale(169, 1.0, 10000.0));
+    patch.set(P::AmpDecay, log_scale(170, 1.0, 20000.0));
+    patch.set(P::AmpSustain, norm(171));
+    patch.set(P::AmpRelease, log_scale(172, 1.0, 10000.0));
+
+    // Filter Envelope
+    patch.set(P::FilterAttack, log_scale(177, 1.0, 10000.0));
+    patch.set(P::FilterDecay, log_scale(178, 1.0, 20000.0));
+    patch.set(P::FilterSustain, norm(179));
+    patch.set(P::FilterRelease, log_scale(180, 1.0, 10000.0));
+
+    // LFO 1
+    patch.set(P::Lfo1Shape, (get_u7(185) % 5.0).floor());
+    patch.set(P::Lfo1Rate, log_scale(188, 0.02, 200.0));
+    patch.set(P::Lfo1Fade, log_scale(191, 1.0, 5000.0));
+    patch.set(P::Lfo1Depth, norm(192));
+
+    // LFO 2
+    patch.set(P::Lfo2Shape, (get_u7(199) % 5.0).floor());
+    patch.set(P::Lfo2Rate, log_scale(202, 0.02, 200.0));
+    patch.set(P::Lfo2Fade, log_scale(205, 1.0, 5000.0));
+    patch.set(P::Lfo2Depth, norm(206));
+
+    // FX
+    patch.set(P::Dist, norm(213));
+    patch.set(P::Chorus, norm(218));
+    patch.set(P::DelayMix, norm(231));
+    patch.set(P::DelayTime, log_scale(233, 1.0, 1400.0));
+    patch.set(P::ReverbMix, norm(243));
+    patch.set(P::ReverbSize, norm(247));
+
+    // Voice default
+    patch.set(P::Volume, 0.0);
+    patch.sanitise();
+
+    Ok((name, patch))
+}
+
 /// One entry in a [`Bank`]: either a factory preset or a user preset on disk.
 #[derive(Clone, Debug)]
 pub struct Entry {
@@ -562,10 +718,26 @@ impl Bank {
                 path: None,
             })
             .collect();
+        for syx in PEAK_DIST_03_SYX_ALL {
+            if let Ok((name, patch)) = parse_syx_patch(syx) {
+                entries.push(Entry {
+                    name,
+                    patch,
+                    factory: true,
+                    path: None,
+                });
+            }
+        }
         if let Some(dir) = &dir {
             entries.extend(read_dir(dir));
         }
         Self { entries, dir }
+    }
+
+    /// Import a `.syx` patch message into the user preset bank.
+    pub fn import_syx(&mut self, data: &[u8]) -> Result<usize, String> {
+        let (name, patch) = parse_syx_patch(data)?;
+        self.store(&name, &patch).map_err(|e| e.to_string())
     }
 
     pub fn names(&self) -> Vec<String> {
@@ -776,10 +948,25 @@ mod tests {
     #[test]
     fn bank_starts_with_the_factory_presets() {
         let bank = Bank::with_dir(None);
-        assert_eq!(bank.len(), FACTORY.len());
+        let expected_len = FACTORY.len() + PEAK_DIST_03_SYX_ALL.len();
+        assert_eq!(bank.len(), expected_len);
         assert_eq!(bank.names()[0], "INIT PATCH");
         assert!(bank.get(0).is_some_and(|e| e.factory));
         assert!(bank.get(bank.len()).is_none());
+    }
+
+    #[test]
+    fn syx_presets_parse_correctly() {
+        assert_eq!(PEAK_DIST_03_SYX_ALL.len(), 10);
+        for syx in PEAK_DIST_03_SYX_ALL {
+            let res = parse_syx_patch(syx);
+            assert!(res.is_ok(), "Failed to parse syx patch: {:?}", res.err());
+            let (name, patch) = res.unwrap();
+            assert!(!name.is_empty());
+            for p in P::ALL {
+                assert!(patch.get(p).is_finite(), "{}: {p:?} is not finite", name);
+            }
+        }
     }
 
     #[test]
@@ -791,24 +978,25 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&dir);
 
+        let base_len = FACTORY.len() + PEAK_DIST_03_SYX_ALL.len();
         let mut bank = Bank::with_dir(Some(dir.clone()));
         let mut patch = Patch::default();
         patch.set(P::Cutoff, 1234.0);
         patch.set(P::Osc2Level, 0.5);
 
         let index = bank.store("My Sound", &patch).expect("store");
-        assert_eq!(bank.len(), FACTORY.len() + 1);
+        assert_eq!(bank.len(), base_len + 1);
         assert_eq!(bank.names()[index], "My Sound");
         assert!(!bank.get(index).unwrap().factory);
 
         // Storing the same name again must not clobber the first one.
         let second = bank.store("My Sound", &patch).expect("store again");
         assert_eq!(bank.names()[second], "My Sound 2");
-        assert_eq!(bank.len(), FACTORY.len() + 2);
+        assert_eq!(bank.len(), base_len + 2);
 
         // A fresh bank reads both back with the values intact.
         let reloaded = Bank::with_dir(Some(dir.clone()));
-        let entry = reloaded.get(FACTORY.len()).expect("reloaded entry");
+        let entry = reloaded.get(base_len).expect("reloaded entry");
         assert_eq!(entry.name, "My Sound");
         assert!((entry.patch.get(P::Cutoff) - 1234.0).abs() < 1e-3);
         assert!((entry.patch.get(P::Osc2Level) - 0.5).abs() < 1e-6);
@@ -816,7 +1004,7 @@ mod tests {
         // A corrupt file is skipped instead of failing the whole bank.
         fs::write(dir.join("zz-broken.json"), b"{ not json").unwrap();
         let with_broken = Bank::with_dir(Some(dir.clone()));
-        assert_eq!(with_broken.len(), FACTORY.len() + 2);
+        assert_eq!(with_broken.len(), base_len + 2);
 
         let _ = fs::remove_dir_all(&dir);
     }

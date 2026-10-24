@@ -105,6 +105,31 @@ pub trait PanelHost {
     fn is_live(&self) -> bool {
         true
     }
+
+    /// Returns 256x64 monochrome OLED display pixels (0..255 per pixel) if an emulator or display model is active.
+    fn oled_pixels(&self) -> Option<Vec<u8>> {
+        None
+    }
+
+    /// Bitmask of currently active voices (bits 0..7 for voices 1..8).
+    fn voice_led_mask(&self) -> u8 {
+        let active = self.active_voices().min(8);
+        if active == 0 {
+            0
+        } else {
+            (1u8 << active) - 1
+        }
+    }
+
+    /// Returns (is_emulating, instruction_cycles).
+    fn emulator_status(&self) -> (bool, u64) {
+        (self.firmware().is_some(), 0)
+    }
+
+    /// Import a raw `.syx` patch file and activate it. Returns the patch name.
+    fn import_syx(&mut self, _data: &[u8]) -> Result<String, String> {
+        Err("this host cannot import .syx presets".to_string())
+    }
 }
 
 /// UI-only state: text field contents, which knob is being dragged, drag & drop
@@ -120,6 +145,8 @@ pub struct PanelState {
     pub show_help: bool,
     /// Result of the last store action, shown in the display until the next one.
     pub preset_msg: Option<String>,
+    pub import_syx_open: bool,
+    pub syx_path_input: String,
 }
 
 impl PanelState {

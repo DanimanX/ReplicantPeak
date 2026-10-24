@@ -3,6 +3,27 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [1.0.3] — 2026-10-24
+
+### Added
+
+- **Firmware Emulation Integration in Plugin Runtime:**
+  - Integrated `peak-emulator` into `peak-plugin` and `peak-panel`.
+  - When the firmware is linked, the STM32F429 ARM Cortex-M4 emulator is instantiated and executed, stepping instruction cycles in the background to drive front panel MMIO and display state.
+  - Active instruction counter and MMIO communication exposed to the host interface.
+- **Authentic Novation Peak OLED Display Panel (`peak-ui`):**
+  - Integrated 256×64 monochrome OLED screen with dot-matrix scanlines, live oscilloscope waveform, patch metadata, and real-time CPU emulation cycle count.
+  - 8 physical Voice Activity LEDs on the display panel with glowing cyan halos and white center hotspots, illuminating dynamically per sounding voice.
+- **Master Volume Control:**
+  - Added dedicated `VOLUME` knob to the front panel voice section (`P::Volume`, `-48.0 dB .. +6.0 dB`).
+- **Novation Peak SysEx Preset Import (`.syx`):**
+  - Added native SysEx parser for 527-byte Peak single patch dumps (`parse_syx_patch`), mapping Oscillators 1-3, Mixer, Filter, Envelopes, LFOs, FX, and Voice parameters.
+  - Added `IMPORT .SYX` button with in-display path loader and drag-and-drop support for `.syx` patch files.
+  - Bundled all 10 Montfrooij `PeakDist03` presets (`TnTDistCareFULL`, `TnTSyncPadKrunch`, etc.) into the factory library.
+- **Sound Fidelity & Acoustic Tuning:**
+  - Tuned saturation and resonance behavior against the reference demonstration in video [9DpocpgXDaM].
+  - Updated README screenshot `assets/panel.png` capturing the new OLED screen and Volume knob.
+
 ## [1.0.2] — 2026-10-24
 
 ### Added

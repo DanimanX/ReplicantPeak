@@ -1245,6 +1245,36 @@ mod tests {
     }
 
     #[test]
+    fn peakdist03_presets_render_finite_distorted_audio() {
+        let mut engine = Engine::new(48_000.0);
+        engine.set_bank(crate::wavetable::Bank::generate(42));
+        for syx in crate::preset::PEAK_DIST_03_SYX_ALL {
+            let (name, patch) = crate::preset::parse_syx_patch(syx).expect("syx parse");
+            let mut l = vec![0.0; 1024];
+            let mut r = vec![0.0; 1024];
+            engine.process(
+                &patch,
+                &[Event::NoteOn {
+                    note: 60,
+                    velocity: 0.9,
+                }],
+                &mut l,
+                &mut r,
+            );
+            let energy = rms(&l) + rms(&r);
+            assert!(
+                energy > 0.001,
+                "{}: expected audio output, got rms {}",
+                name,
+                energy
+            );
+            for s in l.iter().chain(r.iter()) {
+                assert!(s.is_finite(), "{}: sample is not finite", name);
+            }
+        }
+    }
+
+    #[test]
     fn output_stays_bounded_and_finite_at_extremes() {
         let mut engine = Engine::new(48_000.0);
         engine.set_bank(Bank::generate(9));
