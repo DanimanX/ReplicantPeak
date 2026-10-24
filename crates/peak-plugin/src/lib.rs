@@ -20,7 +20,7 @@ use std::time::Duration;
 use crossbeam::channel::{bounded, Receiver, Sender};
 use nih_plug::prelude::*;
 use nih_plug_egui::{create_egui_editor, egui};
-use peak_core::{Bank, Engine, Event, LinkedFirmware, Patch, P};
+use peak_core::{Bank, Engine, Event, LinkedFirmware, Patch, PresetBank, P};
 use peak_ui::{FirmwareStamp, LinkStatus, PanelHost, PanelState};
 
 use params::{FirmwareStore, PeakParams};
@@ -30,6 +30,11 @@ use params::{FirmwareStore, PeakParams};
 struct Shared {
     status: Mutex<LinkStatus>,
     bank: Mutex<Option<Arc<Bank>>>,
+    presets: Mutex<PresetBank>,
+    /// Name of the preset last selected, so the display survives a repaint
+    /// without being a host parameter.
+    preset_name: Mutex<String>,
+    preset_index: AtomicUsize,
     active: AtomicUsize,
 }
 
@@ -38,7 +43,28 @@ impl Shared {
         Self {
             status: Mutex::new(LinkStatus::Idle),
             bank: Mutex::new(None),
+            presets: Mutex::new(PresetBank::new()),
+            preset_name: Mutex::new("INIT PATCH".to_string()),
+            preset_index: AtomicUsize::new(0),
             active: AtomicUsize::new(0),
+        }
+    }
+
+    fn bank_linked(&self) -> bool {
+        self.bank.lock().map(|b| b.is_some()).unwrap_or(false)
+    }
+
+    fn preset_name(&self) -> String {
+        self.preset_name
+            .lock()
+            .map(|n| n.clone())
+            .unwrap_or_else(|_| "INIT PATCH".to_string())
+    }
+
+    fn set_preset(&self, index: usize, name: String) {
+        self.preset_index.store(index, Ordering::Relaxed);
+        if let Ok(mut slot) = self.preset_name.lock() {
+            *slot = name;
         }
     }
 
@@ -66,7 +92,9 @@ pub struct ReplicantPeak {
     patch: Patch,
     /// Scratch channel for hosts that hand us mono.
     mono_scratch: Vec<f32>,
-    relink_attempted: bool,
+    /// Firmware path already handed to the linker, so a saved session relinks
+    /// once per path instead of on every editor frame.
+    relinked_path: Option<String>,
 }
 
 impl Default for ReplicantPeak {
@@ -80,7 +108,7 @@ impl Default for ReplicantPeak {
             link_rx,
             patch: Patch::default(),
             mono_scratch: Vec::new(),
-            relink_attempted: false,
+            relinked_path: None,
         }
     }
 }
@@ -139,6 +167,86 @@ fn spawn_link(
             }
         }
     });
+}
+
+/// Translate a host note event into an engine event. Events the engine does not
+/// use are dropped here rather than growing the staging buffer.
+fn map_note_event(event: NoteEvent<()>) -> Option<Event> {
+    match event {
+        // MIDI 1.0 says a note-on with velocity 0 is a note-off; some hosts and
+        // controllers still send it that way.
+        NoteEvent::NoteOn { note, velocity, .. } if velocity <= 0.0 => {
+            Some(Event::NoteOff { note })
+        }
+        NoteEvent::NoteOn { note, velocity, .. } => Some(Event::NoteOn { note, velocity }),
+        NoteEvent::NoteOff { note, .. } => Some(Event::NoteOff { note }),
+        NoteEvent::Choke { .. } => Some(Event::AllNotesOff),
+        NoteEvent::MidiPitchBend { value, .. } => Some(Event::PitchBend {
+            normalized: value * 2.0 - 1.0,
+        }),
+        NoteEvent::MidiCC { cc, .. } if cc == 120 || cc == 123 => Some(Event::AllNotesOff),
+        _ => None,
+    }
+}
+
+/// Editor-frame relink: if the session has a firmware stamp but the engine has
+/// no bank and no link is in flight, start one. `spawn_link` switches the status
+/// to `Working` before returning, so this runs at most once per attempt.
+fn relink_from_state(state: &EditorState) {
+    if state.shared.bank_linked() || state.shared.status() != LinkStatus::Idle {
+        return;
+    }
+    let Some(path) = state
+        .params
+        .firmware
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+        .and_then(|stamp| stamp.path)
+    else {
+        return;
+    };
+    spawn_link(
+        state.tx.clone(),
+        state.shared.clone(),
+        state.params.firmware.clone(),
+        path,
+        None,
+        true,
+    );
+}
+
+impl ReplicantPeak {
+    /// Hand the firmware path saved with the session to the linker, at most once
+    /// per distinct path. A failed attempt is not retried automatically: the
+    /// panel reports the error and the user can point at a file again.
+    fn relink_saved(&mut self) {
+        if self.engine.has_bank() {
+            return;
+        }
+        let Some(path) = self
+            .params
+            .firmware
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+            .and_then(|stamp| stamp.path)
+        else {
+            return;
+        };
+        if self.relinked_path.as_deref() == Some(path.as_str()) {
+            return;
+        }
+        self.relinked_path = Some(path.clone());
+        spawn_link(
+            self.link_tx.clone(),
+            self.shared.clone(),
+            self.params.firmware.clone(),
+            path,
+            None,
+            true,
+        );
+    }
 }
 
 struct EditorHost<'a> {
@@ -224,7 +332,61 @@ impl PanelHost for EditorHost<'_> {
     }
 
     fn preset_name(&self) -> String {
-        "INIT PATCH".to_string()
+        self.shared.preset_name()
+    }
+
+    fn preset_names(&self) -> Vec<String> {
+        self.shared
+            .presets
+            .lock()
+            .map(|bank| bank.names())
+            .unwrap_or_default()
+    }
+
+    fn preset_index(&self) -> usize {
+        self.shared.preset_index.load(Ordering::Relaxed)
+    }
+
+    /// Loading a preset is a full parameter gesture: the host sees one edit per
+    /// parameter inside a begin/end pair, so undo and automation stay coherent.
+    fn select_preset(&mut self, index: usize) {
+        let entry = self
+            .shared
+            .presets
+            .lock()
+            .ok()
+            .and_then(|bank| bank.get(index).cloned());
+        let Some(entry) = entry else {
+            return;
+        };
+        for p in P::ALL {
+            self.setter.begin_set_parameter(self.params.float(p));
+            self.setter
+                .set_parameter(self.params.float(p), entry.patch.get(p));
+            self.setter.end_set_parameter(self.params.float(p));
+        }
+        self.shared.set_preset(index, entry.name);
+    }
+
+    fn store_preset(&mut self) -> Result<String, String> {
+        let mut patch = Patch::default();
+        self.params.write_into(&mut patch);
+        patch.name = self.shared.preset_name();
+        let mut bank = self
+            .shared
+            .presets
+            .lock()
+            .map_err(|_| "preset bank is poisoned".to_string())?;
+        let index = bank
+            .store(&self.shared.preset_name(), &patch)
+            .map_err(|error| format!("cannot store preset: {error}"))?;
+        let name = bank
+            .get(index)
+            .map(|e| e.name.clone())
+            .unwrap_or_else(|| "USER PATCH".to_string());
+        drop(bank);
+        self.shared.set_preset(index, name.clone());
+        Ok(name)
     }
 }
 
@@ -250,6 +412,10 @@ impl Plugin for ReplicantPeak {
         ..AudioIOLayout::const_default()
     }];
 
+    // Without this the CLAP/VST3 wrappers never hand the plugin any note
+    // events, so the engine would be silent no matter what the host sends.
+    const MIDI_INPUT: MidiConfig = MidiConfig::Basic;
+
     type SysExMessage = ();
     type BackgroundTask = ();
 
@@ -268,31 +434,10 @@ impl Plugin for ReplicantPeak {
         context.set_latency_samples(0);
 
         // A saved session knows where the image was. Relink in the background so
-        // a reloaded project makes sound without opening the editor.
-        if !self.relink_attempted {
-            self.relink_attempted = true;
-            let stored = self
-                .params
-                .firmware
-                .lock()
-                .ok()
-                .and_then(|guard| guard.clone());
-            if let Some(stamp) = stored {
-                if let Some(path) = stamp.path {
-                    spawn_link(
-                        self.link_tx.clone(),
-                        self.shared.clone(),
-                        self.params.firmware.clone(),
-                        path,
-                        None,
-                        true,
-                    );
-                } else if let Ok(mut slot) = self.params.firmware.lock() {
-                    // Nothing to relink from: the gate must ask again.
-                    *slot = None;
-                }
-            }
-        }
+        // a reloaded project makes sound without opening the editor. Note that
+        // hosts usually restore the state *after* `initialize()`, so the editor
+        // path below tries again once the stamp is actually there.
+        self.relink_saved();
         true
     }
 
@@ -302,23 +447,10 @@ impl Plugin for ReplicantPeak {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        // Opening the editor is also a chance to relink if the engine lost its
-        // bank (for example after a sample-rate change in some hosts).
-        if !self.engine.has_bank() && !self.relink_attempted {
-            self.relink_attempted = true;
-            if let Some(stamp) = self.params.firmware.lock().ok().and_then(|g| g.clone()) {
-                if let Some(path) = stamp.path {
-                    spawn_link(
-                        self.link_tx.clone(),
-                        self.shared.clone(),
-                        self.params.firmware.clone(),
-                        path,
-                        None,
-                        true,
-                    );
-                }
-            }
-        }
+        // Opening the editor is also a chance to relink: hosts restore the
+        // saved state after `initialize()`, so this is often the first moment
+        // the stored firmware path is visible.
+        self.relink_saved();
 
         let state = EditorState {
             params: self.params.clone(),
@@ -332,6 +464,9 @@ impl Plugin for ReplicantPeak {
             state,
             |ctx, _state| peak_ui::panel::install_style(ctx),
             |ctx, setter, state| {
+                // The host may restore a saved session's firmware path at any
+                // point; when it does, the engine still needs its bank.
+                relink_from_state(state);
                 let frame = egui::Frame::NONE.fill(peak_ui::theme::BG);
                 egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
                     let mut host = EditorHost {
@@ -364,17 +499,7 @@ impl Plugin for ReplicantPeak {
         let mut events = [Event::AllNotesOff; 128];
         let mut count = 0usize;
         while let Some(event) = context.next_event() {
-            let mapped = match event {
-                NoteEvent::NoteOn { note, velocity, .. } => Some(Event::NoteOn { note, velocity }),
-                NoteEvent::NoteOff { note, .. } => Some(Event::NoteOff { note }),
-                NoteEvent::Choke { .. } => Some(Event::AllNotesOff),
-                NoteEvent::MidiPitchBend { value, .. } => Some(Event::PitchBend {
-                    normalized: value * 2.0 - 1.0,
-                }),
-                NoteEvent::MidiCC { cc, .. } if cc == 120 || cc == 123 => Some(Event::AllNotesOff),
-                _ => None,
-            };
-            if let Some(event) = mapped {
+            if let Some(event) = map_note_event(event) {
                 if count < events.len() {
                     events[count] = event;
                     count += 1;
@@ -382,31 +507,43 @@ impl Plugin for ReplicantPeak {
             }
         }
 
+        self.render(buffer.as_slice(), &events[..count]);
+        ProcessStatus::Normal
+    }
+}
+
+impl ReplicantPeak {
+    /// Render one block into the host's channel slices.
+    ///
+    /// Kept separate from `process()` so the render path can be exercised
+    /// without a host: the wrappers own `Buffer`, which cannot be constructed
+    /// outside nih-plug.
+    fn render(&mut self, channels: &mut [&mut [f32]], events: &[Event]) {
         self.params.write_into(&mut self.patch);
-        let channels = buffer.as_slice();
         match channels.len() {
             0 => {}
             1 => {
                 let frames = channels[0].len();
                 if self.mono_scratch.len() >= frames {
-                    let (mono, scratch) = (&mut channels[0], &mut self.mono_scratch[..frames]);
-                    self.engine
-                        .process(&self.patch, &events[..count], mono, scratch);
+                    self.engine.process(
+                        &self.patch,
+                        events,
+                        channels[0],
+                        &mut self.mono_scratch[..frames],
+                    );
                 } else {
                     channels[0].iter_mut().for_each(|s| *s = 0.0);
                 }
             }
             _ => {
                 let (left, right) = channels.split_at_mut(1);
-                self.engine
-                    .process(&self.patch, &events[..count], left[0], right[0]);
+                self.engine.process(&self.patch, events, left[0], right[0]);
             }
         }
 
         self.shared
             .active
             .store(self.engine.active_voices(), Ordering::Relaxed);
-        ProcessStatus::Normal
     }
 }
 
@@ -534,5 +671,173 @@ mod tests {
         let plugin = ReplicantPeak::default();
         assert!(!plugin.engine.has_bank());
         assert!(plugin.params.firmware.lock().unwrap().is_none());
+    }
+
+    /// The wrappers drop every note event unless the plugin declares MIDI input.
+    /// This is what made the first release silent in a DAW.
+    #[test]
+    fn declares_midi_input() {
+        assert!(
+            ReplicantPeak::MIDI_INPUT >= MidiConfig::Basic,
+            "the host wrappers only deliver note events when MIDI_INPUT is set"
+        );
+    }
+
+    fn linked() -> ReplicantPeak {
+        // The same synthetic image shape the core tests use: framing, Novation's
+        // manufacturer id and the firmware product byte.
+        let mut bytes = Vec::new();
+        for i in 0..128u32 {
+            bytes.extend_from_slice(&[
+                0xF0,
+                0x00,
+                0x20,
+                0x29,
+                0x00,
+                0x71,
+                0x00,
+                0x7E,
+                (i % 128) as u8,
+                0xF7,
+            ]);
+        }
+        let linked = peak_core::link_firmware(&bytes, None).expect("synthetic image parses");
+        let mut plugin = ReplicantPeak::default();
+        plugin.engine.set_bank(linked.bank);
+        plugin
+    }
+
+    fn rms(samples: &[f32]) -> f32 {
+        let sum: f32 = samples.iter().map(|s| s * s).sum();
+        (sum / samples.len().max(1) as f32).sqrt()
+    }
+
+    fn render(plugin: &mut ReplicantPeak, events: &[Event], frames: usize) -> (Vec<f32>, Vec<f32>) {
+        let mut left = vec![0.0; frames];
+        let mut right = vec![0.0; frames];
+        {
+            let mut channels: [&mut [f32]; 2] = [&mut left, &mut right];
+            plugin.render(&mut channels, events);
+        }
+        (left, right)
+    }
+
+    /// The end-to-end path a host drives: link, note on, render.
+    #[test]
+    fn a_note_on_renders_audio_once_linked() {
+        let mut plugin = linked();
+        let events = [Event::NoteOn {
+            note: 60,
+            velocity: 0.9,
+        }];
+        let (left, _right) = render(&mut plugin, &events, 2048);
+        assert!(
+            rms(&left) > 1e-4,
+            "linked plugin rendered silence: rms {}",
+            rms(&left)
+        );
+        assert!(left.iter().all(|s| s.is_finite()), "non-finite samples");
+        assert!(plugin.engine.active_voices() >= 1);
+    }
+
+    /// And the gate still holds: no bank, no sound, however many notes arrive.
+    #[test]
+    fn an_unlinked_plugin_stays_silent() {
+        let mut plugin = ReplicantPeak::default();
+        let events = [Event::NoteOn {
+            note: 60,
+            velocity: 1.0,
+        }];
+        let (left, right) = render(&mut plugin, &events, 512);
+        assert!(left.iter().all(|s| *s == 0.0));
+        assert!(right.iter().all(|s| *s == 0.0));
+        assert_eq!(plugin.engine.active_voices(), 0);
+    }
+
+    /// A note-off must release the voice instead of leaving it ringing. The
+    /// reverb and delay tails are still audible for a moment, so the check is
+    /// that the level collapses by orders of magnitude and no voice stays busy.
+    #[test]
+    fn note_off_releases_the_voice() {
+        let mut plugin = linked();
+        let (held, _) = render(
+            &mut plugin,
+            &[Event::NoteOn {
+                note: 60,
+                velocity: 0.8,
+            }],
+            4_800,
+        );
+        let sustained = rms(&held[held.len() / 2..]);
+
+        render(&mut plugin, &[Event::NoteOff { note: 60 }], 512);
+        let (tail, _) = render(&mut plugin, &[], 96_000);
+        let last = rms(&tail[tail.len() - 1024..]);
+
+        assert!(
+            last < sustained * 0.02,
+            "voice still ringing after note-off: {last} vs {sustained}"
+        );
+        assert_eq!(plugin.engine.active_voices(), 0, "voice left active");
+    }
+
+    /// The plugin's preset bank is the factory bank plus user presets; the panel
+    /// reads names and the current slot from exactly these.
+    #[test]
+    fn preset_bank_is_available_to_the_editor() {
+        let shared = Shared::new();
+        let names = shared.presets.lock().unwrap().names();
+        assert!(names.len() >= 8, "expected a factory bank");
+        assert_eq!(names[0], "INIT PATCH");
+        assert_eq!(shared.preset_name(), "INIT PATCH");
+        assert_eq!(shared.preset_index.load(Ordering::Relaxed), 0);
+
+        shared.set_preset(3, names[3].clone());
+        assert_eq!(shared.preset_name(), names[3]);
+        assert_eq!(shared.preset_index.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn zero_velocity_note_on_releases() {
+        let event = NoteEvent::NoteOn {
+            timing: 0,
+            voice_id: None,
+            channel: 0,
+            note: 64,
+            velocity: 0.0,
+        };
+        assert!(matches!(
+            map_note_event(event),
+            Some(Event::NoteOff { note: 64 })
+        ));
+    }
+
+    #[test]
+    fn mapped_events_match_the_engine() {
+        use nih_plug::prelude::NoteEvent as N;
+        let cases = [
+            N::NoteOn {
+                timing: 0,
+                voice_id: None,
+                channel: 0,
+                note: 60,
+                velocity: 0.5,
+            },
+            N::NoteOff {
+                timing: 0,
+                voice_id: None,
+                channel: 0,
+                note: 60,
+                velocity: 0.0,
+            },
+        ];
+        assert!(matches!(
+            map_note_event(cases[0]),
+            Some(Event::NoteOn { note: 60, .. })
+        ));
+        assert!(matches!(
+            map_note_event(cases[1]),
+            Some(Event::NoteOff { note: 60 })
+        ));
     }
 }

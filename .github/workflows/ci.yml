@@ -63,7 +63,14 @@ jobs:
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
             libx11-dev libx11-xcb-dev libxcb1-dev libgl1-mesa-dev
 
+      # The cdylib is what the CLAP probe dlopens, and `cargo test` does not
+      # build it on its own.
+      - name: Build plugin library
+        run: cargo build -p peak-plugin
+
       - run: cargo test --workspace
+        env:
+          PEAK_REQUIRE_CLAP_PROBE: "1"
 
       # Proves the plugin still bundles on every OS; the release workflow
       # packages these same bundles as per-format downloads.

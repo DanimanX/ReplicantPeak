@@ -7,6 +7,7 @@
 //! * `PEAK_PANEL_SHOT=assets/panel.png peak-panel` — render once and exit.
 //! * `PEAK_FIRMWARE=/path/to/peak-firmware.syx` — link an image on startup
 //!   (otherwise the gate is shown, which is what a first run looks like).
+//! * `PEAK_PANEL_PRESET=3` — start on the fourth preset of the bank.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam::channel::{bounded, Receiver, Sender};
 use eframe::egui;
-use peak_core::{Bank, LinkedFirmware, Patch, P};
+use peak_core::{Bank, LinkedFirmware, Patch, PresetBank, P};
 use peak_ui::{FirmwareStamp, LinkStatus, PanelHost, PanelState};
 
 fn main() {
@@ -56,6 +57,8 @@ struct Preview {
     delay: Duration,
     started: Instant,
     shot_requested: bool,
+    presets: PresetBank,
+    preset_index: usize,
 }
 
 impl Preview {
@@ -73,7 +76,16 @@ impl Preview {
             delay: Duration::from_millis(delay_ms),
             started: Instant::now(),
             shot_requested: false,
+            presets: PresetBank::new(),
+            preset_index: 0,
         };
+
+        if let Some(index) = std::env::var("PEAK_PANEL_PRESET")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+        {
+            preview.select_preset(index);
+        }
 
         if let Ok(path) = std::env::var("PEAK_FIRMWARE") {
             preview.link_path(&path);
@@ -190,6 +202,40 @@ impl PanelHost for Preview {
         self.patch.name = name;
     }
 
+    fn preset_names(&self) -> Vec<String> {
+        self.presets.names()
+    }
+
+    fn preset_index(&self) -> usize {
+        self.preset_index
+    }
+
+    fn select_preset(&mut self, index: usize) {
+        let Some(entry) = self.presets.get(index) else {
+            return;
+        };
+        let patch = entry.patch.clone();
+        let name = entry.name.clone();
+        self.patch = patch;
+        self.patch.name = name;
+        self.preset_index = index;
+    }
+
+    fn store_preset(&mut self) -> Result<String, String> {
+        let index = self
+            .presets
+            .store(&self.patch.name.clone(), &self.patch)
+            .map_err(|error| error.to_string())?;
+        let name = self
+            .presets
+            .get(index)
+            .map(|entry| entry.name.clone())
+            .unwrap_or_else(|| self.patch.name.clone());
+        self.patch.name = name.clone();
+        self.preset_index = index;
+        Ok(name)
+    }
+
     fn is_live(&self) -> bool {
         false
     }
@@ -244,5 +290,67 @@ impl eframe::App for Preview {
         } else {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The preview host is the same code path the plugin editor uses for
+    /// presets, so exercising it here covers the browser without a DAW.
+    fn preview() -> Preview {
+        Preview::new(None, 0)
+    }
+
+    #[test]
+    fn browser_starts_on_the_init_patch() {
+        let preview = preview();
+        let names = preview.preset_names();
+        assert_eq!(names.len(), PresetBank::new().len());
+        assert_eq!(preview.preset_index(), 0);
+        assert_eq!(preview.preset_name(), "INIT PATCH");
+    }
+
+    #[test]
+    fn selecting_a_preset_loads_its_parameters_and_name() {
+        let mut preview = preview();
+        let before = preview.value(P::Cutoff);
+        preview.select_preset(2);
+        assert_eq!(preview.preset_index(), 2);
+        assert_ne!(preview.preset_name(), "INIT PATCH");
+        assert_ne!(preview.value(P::Cutoff), before, "cutoff did not move");
+        assert_eq!(preview.preset_name(), preview.preset_names()[2]);
+    }
+
+    #[test]
+    fn out_of_range_selection_is_ignored() {
+        let mut preview = preview();
+        preview.select_preset(usize::MAX);
+        assert_eq!(preview.preset_index(), 0);
+        assert_eq!(preview.preset_name(), "INIT PATCH");
+    }
+
+    #[test]
+    fn storing_writes_a_user_preset_into_the_bank() {
+        let mut preview = preview();
+        let dir = std::env::temp_dir().join(format!("replicant-panel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        preview.presets = PresetBank::with_dir(Some(dir.clone()));
+        preview.patch.name = "PANEL TAKE".to_string();
+        preview.set(P::Reso, 0.44);
+
+        let name = preview.store_preset().expect("store");
+        assert_eq!(name, "PANEL TAKE");
+        assert_eq!(preview.preset_index(), preview.presets.len() - 1);
+        assert!(dir.join("panel_take.json").is_file());
+
+        // And it survives a reload of the bank.
+        let reloaded = PresetBank::with_dir(Some(dir.clone()));
+        let entry = reloaded.get(reloaded.len() - 1).expect("entry");
+        assert_eq!(entry.name, "PANEL TAKE");
+        assert!((entry.patch.get(P::Reso) - 0.44).abs() < 1e-6);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -51,7 +51,8 @@ Rust 1.80 or newer. On Linux the panel needs the usual X11/Wayland development
 headers for egui/winit.
 
 ```
-cargo test --workspace          # 35 tests: engine, firmware, parameters, panel
+cargo build -p peak-plugin      # the CLAP probe dlopens this cdylib
+cargo test --workspace          # 52 tests: engine, firmware, presets, panel, host
 cargo run -p peak-panel         # open the panel (no audio)
 ```
 
@@ -67,6 +68,29 @@ README screenshot (needs `xvfb-run` when there is no display):
 ```
 scripts/screenshot.sh            # -> assets/panel.png
 ```
+
+## Presets
+
+The display holds the preset browser: `<` and `>` step through the bank and
+`STORE` writes the current parameters as a user preset. The bank is the 12
+factory presets (`INIT PATCH`, `PEAK BASS`, `WIDE SAW STACK`, `GLASS PAD`,
+`FM BELL`, `RING METAL`, `ACID LEAD`, `SUB PLUCK`, `NOISE SWEEP`,
+`WARM CHORDS`, `TAPE KEYS`, `HOLLOW FIFTHS`) followed by whatever the user has
+saved. Loading a preset goes through the host as one parameter gesture per
+control, so it is captured by automation and undo like a knob move.
+
+User presets are JSON files in:
+
+- Linux: `$XDG_DATA_HOME/ReplicantPeak/presets` (or `~/.local/share/...`)
+- macOS: `~/Library/Application Support/ReplicantPeak/presets`
+- Windows: `%APPDATA%\ReplicantPeak\presets`
+
+**These are patches for this engine, not the Peak's factory bank.** Novation
+ships its factory patches as a separate bank download in Components (see the
+1.1 and 1.2 release notes in `firmware/release-notes/`), and the firmware
+`.syx` contains no patch records: its 7,784 messages are one 15-byte header plus
+7,783 fixed 44-byte firmware frames (`F0 00 20 29 00 72 ... F7`), and a scan of
+the payload finds no preset names or parameter blocks — only code.
 
 ## Plugin formats
 
@@ -102,6 +126,11 @@ it:
 - drag the file onto the panel, or
 - type its path into the lock screen field, or
 - set `PEAK_FIRMWARE=/path/to/firmware.syx` for the standalone panel.
+
+MIDI note input is declared by the plugin (`MidiConfig::Basic`), so hosts
+deliver notes, pitch bend and all-notes-off; a note-on with velocity 0 is
+treated as a note-off. Note events are applied at the start of each audio block
+rather than sample-accurately.
 
 Validation is strict: SysEx framing (`F0`…`F7`), Novation's manufacturer id
 `00 20 29`, product byte `0x71` (firmware) or `0x7C` (FPGA) and a minimum

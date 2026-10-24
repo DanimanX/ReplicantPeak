@@ -270,6 +270,72 @@ fn header(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut PanelState, rect: R
     let _ = state;
 }
 
+/// The preset browser, drawn inside the display: previous/next, slot number and
+/// a store button. Hidden behind a single row so it never fights the readout.
+fn preset_bar(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut PanelState, inner: Rect) {
+    let names = host.preset_names();
+    let count = names.len();
+    let index = host.preset_index().min(count.saturating_sub(1));
+
+    let bar = Rect::from_min_max(
+        pos2(inner.left(), inner.bottom() - 20.0),
+        pos2(inner.right(), inner.bottom()),
+    );
+    let button_w = 22.0;
+    let prev = Rect::from_min_size(bar.min, vec2(button_w, bar.height()));
+    let next = Rect::from_min_size(
+        pos2(prev.right() + 4.0, bar.top()),
+        vec2(button_w, bar.height()),
+    );
+    let store = Rect::from_min_size(
+        pos2(bar.right() - 58.0, bar.top()),
+        vec2(58.0, bar.height()),
+    );
+
+    let enabled = count > 0 && host.is_live();
+    let prev_clicked = widgets::neon_button(ui, prev, "<", CYAN, false).clicked();
+    let next_clicked = widgets::neon_button(ui, next, ">", CYAN, false).clicked();
+    let store_clicked = widgets::neon_button(ui, store, "STORE", AMBER, false).clicked();
+
+    if prev_clicked && enabled {
+        let target = if index == 0 { count - 1 } else { index - 1 };
+        host.select_preset(target);
+        state.preset_msg = None;
+    }
+    if next_clicked && enabled {
+        let target = if index + 1 >= count { 0 } else { index + 1 };
+        host.select_preset(target);
+        state.preset_msg = None;
+    }
+    if store_clicked && enabled {
+        state.preset_msg = Some(match host.store_preset() {
+            Ok(name) => format!("STORED {name}").to_uppercase(),
+            Err(error) => format!("NOT STORED: {error}").to_uppercase(),
+        });
+    }
+
+    let counter = if count == 0 {
+        "NO PRESETS".to_string()
+    } else {
+        format!("{:02}/{:02}", index + 1, count)
+    };
+    let painter = ui.painter();
+    painter.text(
+        pos2(next.right() + 8.0, bar.center().y),
+        Align2::LEFT_CENTER,
+        counter,
+        FontId::monospace(8.5),
+        DIM,
+    );
+    painter.text(
+        pos2(next.right() + 58.0, bar.center().y),
+        Align2::LEFT_CENTER,
+        host.preset_name().to_uppercase(),
+        FontId::monospace(8.5),
+        with_alpha(TEXT, 0.75),
+    );
+}
+
 fn oscillator(
     ui: &mut Ui,
     host: &mut dyn PanelHost,
@@ -310,11 +376,11 @@ fn oscillator(
 
 fn display(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut PanelState, rect: Rect) {
     let content = widgets::section(ui, rect, "DISPLAY", CYAN, Some("OLED 256\u{00d7}64"));
-    let painter = ui.painter();
 
     let screen = Rect::from_min_max(content.min, content.max);
-    painter.rect_filled(screen, egui::CornerRadius::same(2), SCREEN_BG);
-    painter.rect_stroke(
+    ui.painter()
+        .rect_filled(screen, egui::CornerRadius::same(2), SCREEN_BG);
+    ui.painter().rect_stroke(
         screen,
         egui::CornerRadius::same(2),
         Stroke::new(1.0_f32, with_alpha(EDGE_HI, 0.8)),
@@ -323,6 +389,13 @@ fn display(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut PanelState, rect: 
 
     let inner = screen.shrink(10.0);
     let engaged = state.engaged.or(state.hovered);
+
+    // Preset browser: the display is the only place with room, and it is where
+    // the hardware shows the patch number too. Drawn before the painter borrow
+    // because the buttons need to interact with the `Ui`.
+    preset_bar(ui, host, state, inner);
+
+    let painter = ui.painter();
 
     // Header line inside the screen.
     painter.text(
@@ -401,12 +474,16 @@ fn display(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut PanelState, rect: 
                 FontId::monospace(9.0),
                 DIM,
             );
+            let (text, color) = match &state.preset_msg {
+                Some(msg) => (msg.as_str(), AMBER),
+                None => ("TURN A KNOB", with_alpha(AMBER, 0.35)),
+            };
             painter.text(
                 pos2(inner.left(), readout_y + 14.0),
                 Align2::LEFT_TOP,
-                "TURN A KNOB",
+                text,
                 FontId::monospace(17.0),
-                with_alpha(AMBER, 0.35),
+                color,
             );
         }
     }

@@ -6,11 +6,13 @@
 pub mod dsp;
 pub mod firmware;
 pub mod params;
+pub mod preset;
 pub mod wavetable;
 
 pub use dsp::{Engine, Event};
 pub use firmware::{parse as parse_firmware, FirmwareError, FirmwareImage, FwKind};
 pub use params::{Patch, P};
+pub use preset::Bank as PresetBank;
 pub use wavetable::Bank;
 
 use std::sync::Arc;

@@ -76,6 +76,22 @@ pub trait PanelHost {
     fn scope_wave(&self) -> Vec<f32>;
     fn active_voices(&self) -> usize;
     fn max_voices(&self) -> usize;
+    /// Presets offered by the host, in display order. Empty when the host has
+    /// no preset support, in which case the panel hides the browser.
+    fn preset_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+    /// Index into `preset_names` of the preset that is currently loaded.
+    fn preset_index(&self) -> usize {
+        0
+    }
+    /// Load every parameter of preset `index`, as one host automation gesture.
+    fn select_preset(&mut self, _index: usize) {}
+    /// Store the current parameters as a user preset. Returns the name that was
+    /// written, or an error to show in the display.
+    fn store_preset(&mut self) -> Result<String, String> {
+        Err("this host cannot store presets".to_string())
+    }
     fn preset_name(&self) -> String;
     fn set_preset_name(&mut self, _name: String) {}
 
@@ -97,6 +113,8 @@ pub struct PanelState {
     pub gate_error: Option<String>,
     pub link_attempted: bool,
     pub show_help: bool,
+    /// Result of the last store action, shown in the display until the next one.
+    pub preset_msg: Option<String>,
 }
 
 impl PanelState {

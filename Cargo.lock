@@ -419,6 +419,12 @@ dependencies = [
 [[package]]
 name = "clap-sys"
 version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a76abbdb2907f6fd97fb6bc0b7be96b77d328f2dd9669d1075cc03369ed22154"
+
+[[package]]
+name = "clap-sys"
+version = "0.5.0"
 source = "git+https://github.com/micahrj/clap-sys.git?rev=25d7f53fdb6363ad63fbd80049cb7a42a97ac156#25d7f53fdb6363ad63fbd80049cb7a42a97ac156"
 
 [[package]]
@@ -1784,7 +1790,7 @@ dependencies = [
  "backtrace",
  "bitflags 1.3.2",
  "cfg-if",
- "clap-sys",
+ "clap-sys 0.5.0 (git+https://github.com/micahrj/clap-sys.git?rev=25d7f53fdb6363ad63fbd80049cb7a42a97ac156)",
  "core-foundation",
  "crossbeam",
  "libc",
@@ -2271,6 +2277,7 @@ name = "peak-core"
 version = "1.0.0"
 dependencies = [
  "serde",
+ "serde_json",
  "sha2",
 ]
 
@@ -2290,7 +2297,9 @@ dependencies = [
 name = "peak-plugin"
 version = "1.0.0"
 dependencies = [
+ "clap-sys 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "crossbeam",
+ "libloading",
  "nih_plug",
  "nih_plug_egui",
  "peak-core",

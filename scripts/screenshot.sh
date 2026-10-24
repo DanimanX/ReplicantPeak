@@ -28,8 +28,15 @@ run=(env -u WAYLAND_DISPLAY
     LIBGL_ALWAYS_SOFTWARE=1
     PEAK_FIRMWARE="$firmware"
     PEAK_PANEL_SHOT="$out"
-    PEAK_PANEL_SHOT_DELAY_MS="${PEAK_PANEL_SHOT_DELAY_MS:-1200}"
-    "$repo_root/target/release/peak-panel")
+    PEAK_PANEL_SHOT_DELAY_MS="${PEAK_PANEL_SHOT_DELAY_MS:-1200}")
+
+# PEAK_PANEL_PRESET selects a preset before the capture, so the screenshot can
+# show something other than the init patch.
+if [[ -n "${PEAK_PANEL_PRESET:-}" ]]; then
+    run+=("PEAK_PANEL_PRESET=$PEAK_PANEL_PRESET")
+fi
+
+run+=("$repo_root/target/release/peak-panel")
 
 # Capture deterministically: the host display may be scaled or a Wayland
 # session, either of which changes the pixel size of the window. Opt out with
