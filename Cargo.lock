@@ -2274,7 +2274,7 @@ checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
 name = "peak-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2283,7 +2283,7 @@ dependencies = [
 
 [[package]]
 name = "peak-panel"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "crossbeam",
  "eframe",
@@ -2295,7 +2295,7 @@ dependencies = [
 
 [[package]]
 name = "peak-plugin"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "clap-sys 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "crossbeam",
@@ -2310,7 +2310,7 @@ dependencies = [
 
 [[package]]
 name = "peak-ui"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "egui",
  "peak-core",
@@ -4006,7 +4006,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "nih_plug_xtask",
 ]

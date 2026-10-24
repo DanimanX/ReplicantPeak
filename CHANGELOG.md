@@ -3,6 +3,52 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [1.0.1] — 2026-10-23
+
+### Added
+
+- **Per-oscillator cyberpunk wavetable scopes.** Each oscillator column now has
+  a five-column waterfall rendered as GPU-rasterised egui meshes, with a live
+  interpolated waveform, neon gradients, a phase marker and a column indicator.
+  Drag the scope to sweep SHAPE; click the arrows, drag the wave strip or scroll
+  to select the table.
+- **Peak-style five-column wavetables.** Every table is now a bank of five
+  band-limited frames, and the new bipolar SHAPE parameters interpolate across
+  them. Mip selection and anti-aliasing are unchanged.
+- **Peak-faithful voice controls:** AHDSR envelopes with HOLD, per-voice
+  free-running LFOs with FADE and sample-and-hold, Osc 3 audio-rate filter
+  modulation, FM O1>O2 and O2>O3, oscillator Drift/Diverge, and a bandwidth-
+  limited noise source.
+- **Six filter modes:** LP 12, LP 24, BP 12, HP 24, BP 24 and HP 12. The first
+  four keep their v1.0.0 indices so existing presets load unchanged.
+- **Seven new factory presets:** `NEON SAW`, `FM GLASS`, `PULSE WIDTH`,
+  `BANDPASS SCREAM`, `S&H VOID`, `HOLD ORGAN`, `DRIFT KEYS`.
+- `docs/PEAK_FIDELITY.md`: architecture comparison, sources and an explicit
+  list of what is still not modelled.
+- `docs/FREE_PATCHES.md`: researched free Peak banks and their licence terms.
+
+### Changed
+
+- Oscillator `FINE` is now ±100 cents, matching the hardware. `COARSE` keeps its
+  existing ±24 semitone range, which is the equivalent of Peak's Range + Coarse
+  pair without adding a third oscillator control.
+- Oscillator `SHAPE` is now a bipolar waveform-shape amount; the old wave
+  selector keeps its parameter id and is labelled `WAVE` in the panel.
+- The panel is 60 px taller (1180 × 820) to make room for the three scopes.
+- Ambient motion is on by default at a subtle level: Drift 6%, Diverge 4%, and
+  a very narrow per-voice pan.
+- Parameter count is 60. New parameters are appended to the table, so v1.0.0
+  JSON presets still map their first 47 values correctly.
+
+### Fixed
+
+- The cutoff smoother is advanced once per sample instead of once per voice,
+  which made its time constant depend on polyphony.
+- Note-on now randomises oscillator phase, so stacked voices no longer start
+  phase-coherent.
+- The previous `SHAPE` morph indexed across tables rather than inside one
+  table; it now follows Peak's five-column model.
+
 ## [1.0.0] — 2026-10-23
 
 First release. The 1.0.0 artifacts were rebuilt after the fixes below, so the

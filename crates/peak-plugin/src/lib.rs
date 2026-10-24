@@ -308,17 +308,17 @@ impl PanelHost for EditorHost<'_> {
     }
 
     fn scope_wave(&self) -> Vec<f32> {
-        let shape = self.params.float(P::Osc1Shape).value();
-        let samples = 128;
+        let wave = self.params.float(P::Osc1Shape).value().round() as usize;
+        let shape = self.params.float(P::Osc1ShapeAmt).value();
         match self.shared.bank.lock().ok().and_then(|b| b.clone()) {
-            Some(bank) => {
-                let a = (shape.floor() as usize).min(peak_core::wavetable::TABLES - 1);
-                let b = (a + 1).min(peak_core::wavetable::TABLES - 1);
-                let morph = shape - a as f32;
-                (0..samples)
-                    .map(|i| bank.sample_morph(a, b, morph, 0, i as f32 / samples as f32))
-                    .collect()
-            }
+            Some(bank) => bank.morph_cycle(wave, shape, 128),
+            None => Vec::new(),
+        }
+    }
+
+    fn wavetable(&self, wave: usize, samples: usize) -> Vec<Vec<f32>> {
+        match self.shared.bank.lock().ok().and_then(|b| b.clone()) {
+            Some(bank) => bank.cycles(wave, samples),
             None => Vec::new(),
         }
     }

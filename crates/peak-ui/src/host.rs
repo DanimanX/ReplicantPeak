@@ -74,6 +74,11 @@ pub trait PanelHost {
 
     /// One cycle of the current oscillator shape, for the scope.
     fn scope_wave(&self) -> Vec<f32>;
+    /// The five wavetable columns for the per-oscillator viewer. Empty when no
+    /// firmware bank is linked.
+    fn wavetable(&self, _wave: usize, _samples: usize) -> Vec<Vec<f32>> {
+        Vec::new()
+    }
     fn active_voices(&self) -> usize;
     fn max_voices(&self) -> usize;
     /// Presets offered by the host, in display order. Empty when the host has

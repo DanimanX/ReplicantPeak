@@ -81,21 +81,24 @@ impl Smoothed {
 enum EnvState {
     Idle,
     Attack,
+    Hold,
     Decay,
     Sustain,
     Release,
 }
 
-/// Linear-attack, exponential-decay envelope.
+/// Peak's envelopes are AHDSR: attack, hold, decay, sustain and release.
 pub struct Adsr {
     sample_rate: f32,
     attack: f32,
+    hold: f32,
     decay: f32,
     sustain: f32,
     release: f32,
     state: EnvState,
     level: f32,
     attack_inc: f32,
+    hold_left: u32,
     decay_coef: f32,
     release_coef: f32,
 }
@@ -105,21 +108,24 @@ impl Adsr {
         let mut env = Self {
             sample_rate,
             attack: 0.005,
+            hold: 0.0,
             decay: 0.6,
             sustain: 0.8,
             release: 0.3,
             state: EnvState::Idle,
             level: 0.0,
             attack_inc: 1.0,
+            hold_left: 0,
             decay_coef: 0.001,
             release_coef: 0.001,
         };
-        env.set_times(0.005, 0.6, 0.8, 0.3);
+        env.set_times(0.005, 0.0, 0.6, 0.8, 0.3);
         env
     }
 
-    fn set_times(&mut self, attack: f32, decay: f32, sustain: f32, release: f32) {
+    fn set_times(&mut self, attack: f32, hold: f32, decay: f32, sustain: f32, release: f32) {
         if (self.attack - attack).abs() < 1e-6
+            && (self.hold - hold).abs() < 1e-6
             && (self.decay - decay).abs() < 1e-6
             && (self.sustain - sustain).abs() < 1e-6
             && (self.release - release).abs() < 1e-6
@@ -127,11 +133,13 @@ impl Adsr {
             return;
         }
         self.attack = attack.max(0.0005);
+        self.hold = hold.max(0.0);
         self.decay = decay.max(0.001);
         self.sustain = sustain.clamp(0.0, 1.0);
         self.release = release.max(0.001);
 
         self.attack_inc = 1.0 / (self.attack * self.sample_rate).max(1.0);
+        self.hold_left = (self.hold * self.sample_rate).round() as u32;
         // Reach ~99% of the target within the stated time.
         self.decay_coef = 1.0 - (-4.6 / (self.decay * self.sample_rate).max(1.0)).exp();
         self.release_coef = 1.0 - (-4.6 / (self.release * self.sample_rate).max(1.0)).exp();
@@ -139,6 +147,7 @@ impl Adsr {
 
     fn gate_on(&mut self) {
         self.state = EnvState::Attack;
+        self.hold_left = (self.hold * self.sample_rate).round() as u32;
     }
 
     fn gate_off(&mut self) {
@@ -164,6 +173,19 @@ impl Adsr {
                 self.level += self.attack_inc;
                 if self.level >= 1.0 {
                     self.level = 1.0;
+                    self.state = if self.hold_left > 0 {
+                        EnvState::Hold
+                    } else {
+                        EnvState::Decay
+                    };
+                }
+            }
+            EnvState::Hold => {
+                self.level = 1.0;
+                if self.hold_left > 0 {
+                    self.hold_left -= 1;
+                }
+                if self.hold_left == 0 {
                     self.state = EnvState::Decay;
                 }
             }
@@ -239,24 +261,51 @@ impl Svf {
     }
 }
 
+/// Peak's panel LFOs are per voice and free-running unless key sync is on.
+/// `elapsed` implements the fade-in control, which the panel exposes as FADE.
 struct Lfo {
     phase: f32,
     value: f32,
+    sample_hold: f32,
+    rng: u32,
+    elapsed: f32,
 }
 
 impl Lfo {
-    fn new() -> Self {
+    fn new(seed: u32) -> Self {
         Self {
             phase: 0.0,
             value: 0.0,
+            sample_hold: 0.0,
+            rng: seed | 1,
+            elapsed: 0.0,
         }
     }
 
     #[inline]
-    fn advance(&mut self, rate: f32, shape: u8, sample_rate: f32) -> f32 {
+    fn random(&mut self) -> f32 {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 17;
+        self.rng ^= self.rng << 5;
+        (self.rng as f32 / u32::MAX as f32) * 2.0 - 1.0
+    }
+
+    /// A new voice starts at a free-running phase, which is what Peak does with
+    /// KeySync off (the default).
+    fn retrigger(&mut self, seed: u32) {
+        self.rng = seed | 1;
+        self.phase = (seed >> 8) as f32 / (u32::MAX >> 8) as f32;
+        self.sample_hold = self.random();
+        self.elapsed = 0.0;
+    }
+
+    #[inline]
+    fn advance(&mut self, rate: f32, shape: u8, sample_rate: f32, fade_s: f32) -> f32 {
+        self.elapsed += 1.0 / sample_rate;
         self.phase += rate / sample_rate;
         if self.phase >= 1.0 {
             self.phase -= 1.0;
+            self.sample_hold = self.random();
         }
         let p = self.phase;
         self.value = match shape {
@@ -269,14 +318,18 @@ impl Lfo {
                 }
             }
             2 => 2.0 * p - 1.0,
-            _ => {
+            3 => {
                 if p < 0.5 {
                     1.0
                 } else {
                     -1.0
                 }
             }
+            _ => self.sample_hold,
         };
+        if fade_s > 0.0005 {
+            self.value *= (self.elapsed / fade_s).min(1.0);
+        }
         self.value
     }
 }
@@ -292,12 +345,18 @@ struct Voice {
     amp: Adsr,
     fenv: Adsr,
     filters: [Svf; 2],
+    lfo1: Lfo,
+    lfo2: Lfo,
+    drift_phase: f32,
+    /// Static per-oscillator tuning offset, Peak's Diverge control (-1..1).
+    diverge: [f32; 3],
+    noise_lp: f32,
     rng: u32,
     level: f32,
 }
 
 impl Voice {
-    fn new(sample_rate: f32) -> Self {
+    fn new(sample_rate: f32, seed: u32) -> Self {
         Self {
             note: 0,
             velocity: 0.0,
@@ -309,7 +368,12 @@ impl Voice {
             amp: Adsr::new(sample_rate),
             fenv: Adsr::new(sample_rate),
             filters: [Svf::default(); 2],
-            rng: 0x1234_5678,
+            lfo1: Lfo::new(seed ^ 0x9E37_79B9),
+            lfo2: Lfo::new(seed ^ 0x85EB_CA6B),
+            drift_phase: 0.0,
+            diverge: [0.0; 3],
+            noise_lp: 0.0,
+            rng: seed | 1,
             level: 0.0,
         }
     }
@@ -332,6 +396,23 @@ impl Voice {
         }
         self.filters[0].reset();
         self.filters[1].reset();
+        self.noise_lp = 0.0;
+
+        // Peak's NCOs free-run by default: notes do not all start at phase 0.
+        let mut phases = [0.0f64; 3];
+        for p in &mut phases {
+            *p = self.next_unit() as f64;
+        }
+        self.phase = phases;
+        self.drift_phase = self.next_unit();
+        let mut diverge = [0.0f32; 3];
+        for d in &mut diverge {
+            *d = self.next_unit() * 2.0 - 1.0;
+        }
+        self.diverge = diverge;
+        let seed = self.next_u32();
+        self.lfo1.retrigger(seed);
+        self.lfo2.retrigger(seed.rotate_left(11));
         self.level = 0.0;
     }
 
@@ -342,12 +423,24 @@ impl Voice {
     }
 
     #[inline]
-    fn noise(&mut self) -> f32 {
+    fn next_u32(&mut self) -> u32 {
         // xorshift32: cheap, good enough for a noise source.
         self.rng ^= self.rng << 13;
         self.rng ^= self.rng >> 17;
         self.rng ^= self.rng << 5;
-        (self.rng as f32 / u32::MAX as f32) * 2.0 - 1.0
+        self.rng
+    }
+
+    #[inline]
+    fn next_unit(&mut self) -> f32 {
+        (self.next_u32() as f32 / u32::MAX as f32).clamp(0.0, 1.0)
+    }
+
+    #[inline]
+    fn noise(&mut self, coeff: f32) -> f32 {
+        let raw = self.next_unit() * 2.0 - 1.0;
+        self.noise_lp += (raw - self.noise_lp) * coeff;
+        self.noise_lp
     }
 }
 
@@ -520,6 +613,8 @@ impl Fx {
 #[derive(Clone, Copy)]
 struct Voicing {
     osc_level: [f32; 3],
+    osc_wave: [usize; 3],
+    /// Bipolar Peak SHAPE amount for each oscillator, -1..=1.
     osc_shape: [f32; 3],
     osc_ratio: [f32; 3],
     noise: f32,
@@ -531,10 +626,11 @@ struct Voicing {
     keytrack: f32,
     filter_mode: u8,
     filter_poles: u8,
-    lfo_to_cutoff: f32,
-    lfo_to_pitch: f32,
-    lfo_to_shape: f32,
-    lfo_to_amp: f32,
+    osc3_filter_mod: f32,
+    fm12: f32,
+    fm23: f32,
+    drift: f32,
+    diverge: f32,
     glide_time: f32,
     bend_semitones: f32,
     volume: f32,
@@ -544,8 +640,6 @@ pub struct Engine {
     sample_rate: f32,
     bank: Option<Arc<Bank>>,
     voices: Vec<Voice>,
-    lfo1: Lfo,
-    lfo2: Lfo,
     fx: Fx,
     age: u64,
     pitch_bend: f32,
@@ -570,9 +664,9 @@ impl Engine {
         Self {
             sample_rate: sr,
             bank: None,
-            voices: (0..MAX_VOICES).map(|_| Voice::new(sr)).collect(),
-            lfo1: Lfo::new(),
-            lfo2: Lfo::new(),
+            voices: (0..MAX_VOICES)
+                .map(|i| Voice::new(sr, 0x1234_5678 ^ (i as u32).wrapping_mul(0x9E37_79B9)))
+                .collect(),
             fx: Fx::new(sr),
             age: 0,
             pitch_bend: 0.0,
@@ -595,8 +689,8 @@ impl Engine {
             return;
         }
         self.sample_rate = sr;
-        for v in self.voices.iter_mut() {
-            *v = Voice::new(sr);
+        for (i, v) in self.voices.iter_mut().enumerate() {
+            *v = Voice::new(sr, 0x1234_5678 ^ (i as u32).wrapping_mul(0x9E37_79B9));
         }
         self.fx = Fx::new(sr);
         self.peak = 0.0;
@@ -625,8 +719,6 @@ impl Engine {
             v.filters[1].reset();
         }
         self.fx.reset();
-        self.lfo1 = Lfo::new();
-        self.lfo2 = Lfo::new();
         self.peak = 0.0;
         self.gain_smooth.snap(0.0);
     }
@@ -756,16 +848,31 @@ impl Engine {
             }
         });
 
+        let filter_type = patch.get(P::FilterType).round().clamp(0.0, 5.0) as u8;
+        let (filter_mode, filter_poles) = match filter_type {
+            0 => (0u8, 1u8), // LP 12
+            1 => (0, 2),     // LP 24
+            2 => (1, 1),     // BP 12
+            3 => (2, 2),     // HP 24 (kept at index 3 for v1.0.0 presets)
+            4 => (1, 2),     // BP 24
+            _ => (2, 1),     // HP 12
+        };
+
         let voicing = Voicing {
             osc_level: [
                 patch.get(P::Osc1Level),
                 patch.get(P::Osc2Level),
                 patch.get(P::Osc3Level),
             ],
+            osc_wave: [
+                patch.get(P::Osc1Shape).round().clamp(0.0, 11.0) as usize,
+                patch.get(P::Osc2Shape).round().clamp(0.0, 11.0) as usize,
+                patch.get(P::Osc3Shape).round().clamp(0.0, 11.0) as usize,
+            ],
             osc_shape: [
-                patch.get(P::Osc1Shape),
-                patch.get(P::Osc2Shape),
-                patch.get(P::Osc3Shape),
+                patch.get(P::Osc1ShapeAmt),
+                patch.get(P::Osc2ShapeAmt),
+                patch.get(P::Osc3ShapeAmt),
             ],
             osc_ratio: [
                 (patch.get(P::Osc1Tune) + patch.get(P::Osc1Fine) / 100.0).exp2(),
@@ -779,21 +886,13 @@ impl Engine {
             drive: patch.get(P::Drive),
             env_amt: patch.get(P::FilterEnvAmt),
             keytrack: patch.get(P::Keytrack),
-            filter_mode: match patch.get(P::FilterType).round() as u8 {
-                0 => 0,
-                1 => 0,
-                2 => 1,
-                _ => 2,
-            },
-            filter_poles: if patch.get(P::FilterType).round() as u8 == 0 {
-                1
-            } else {
-                2
-            },
-            lfo_to_cutoff: 0.0,
-            lfo_to_pitch: 0.0,
-            lfo_to_shape: 0.0,
-            lfo_to_amp: 0.0,
+            filter_mode,
+            filter_poles,
+            osc3_filter_mod: patch.get(P::Osc3FilterMod),
+            fm12: patch.get(P::Fm12),
+            fm23: patch.get(P::Fm23),
+            drift: patch.get(P::Drift),
+            diverge: patch.get(P::Diverge),
             glide_time: self.glide_time,
             bend_semitones: self.pitch_bend * self.bend_range,
             volume: patch.get(P::Volume),
@@ -803,12 +902,13 @@ impl Engine {
         let lfo1_shape = patch.get(P::Lfo1Shape).round() as u8;
         let lfo1_depth = patch.get(P::Lfo1Depth);
         let lfo1_dest = patch.get(P::Lfo1Dest).round() as u8;
+        let lfo1_fade = patch.get(P::Lfo1Fade) / 1000.0;
         let lfo2_rate = patch.get(P::Lfo2Rate);
         let lfo2_shape = patch.get(P::Lfo2Shape).round() as u8;
         let lfo2_depth = patch.get(P::Lfo2Depth);
         let lfo2_dest = patch.get(P::Lfo2Dest).round() as u8;
+        let lfo2_fade = patch.get(P::Lfo2Fade) / 1000.0;
 
-        let mut voicing = voicing;
         // LFO 1 and 2 each drive one destination; two LFOs on the same
         // destination add up.
         let routes = [
@@ -818,21 +918,28 @@ impl Engine {
 
         let amp_env = [
             patch.get(P::AmpAttack) / 1000.0,
+            patch.get(P::AmpHold) / 1000.0,
             patch.get(P::AmpDecay) / 1000.0,
             patch.get(P::AmpSustain),
             patch.get(P::AmpRelease) / 1000.0,
         ];
         let filt_env = [
             patch.get(P::FilterAttack) / 1000.0,
+            patch.get(P::FilterHold) / 1000.0,
             patch.get(P::FilterDecay) / 1000.0,
             patch.get(P::FilterSustain),
             patch.get(P::FilterRelease) / 1000.0,
         ];
         for v in self.voices.iter_mut() {
             v.amp
-                .set_times(amp_env[0], amp_env[1], amp_env[2], amp_env[3]);
-            v.fenv
-                .set_times(filt_env[0], filt_env[1], filt_env[2], filt_env[3]);
+                .set_times(amp_env[0], amp_env[1], amp_env[2], amp_env[3], amp_env[4]);
+            v.fenv.set_times(
+                filt_env[0],
+                filt_env[1],
+                filt_env[2],
+                filt_env[3],
+                filt_env[4],
+            );
         }
 
         let sr = self.sample_rate;
@@ -855,27 +962,15 @@ impl Engine {
         let reverb_mix = patch.get(P::ReverbMix);
         let dist = patch.get(P::Dist);
         let dist_gain = 1.0 + dist * 12.0;
+        let noise_cut = 80.0 * 250.0f32.powf(patch.get(P::NoiseTone).clamp(0.0, 1.0));
+        let noise_coeff =
+            (1.0 - (-std::f32::consts::TAU * noise_cut / sr).exp()).clamp(0.0005, 1.0);
 
         let mut peak = 0.0f32;
 
         for i in 0..frames {
-            let lfo1 = self.lfo1.advance(lfo1_rate, lfo1_shape, sr);
-            let lfo2 = self.lfo2.advance(lfo2_rate, lfo2_shape, sr);
-            voicing.lfo_to_cutoff = 0.0;
-            voicing.lfo_to_pitch = 0.0;
-            voicing.lfo_to_shape = 0.0;
-            voicing.lfo_to_amp = 0.0;
-            for (index, dest, depth) in routes {
-                let value = if index == 0 { lfo1 } else { lfo2 };
-                let v = value * depth;
-                match dest {
-                    0 => voicing.lfo_to_pitch += v,
-                    1 => voicing.lfo_to_cutoff += v,
-                    2 => voicing.lfo_to_shape += v,
-                    _ => voicing.lfo_to_amp += v,
-                }
-            }
-
+            // One smoother step per sample, shared by every voice.
+            let base_cutoff = self.cutoff_smooth.next();
             let mut mix_l = 0.0f32;
             let mut mix_r = 0.0f32;
 
@@ -894,17 +989,42 @@ impl Engine {
                     continue;
                 }
 
-                let bend_ratio =
-                    (voicing.bend_semitones / 12.0 + voicing.lfo_to_pitch * 7.0 / 12.0).exp2();
+                // Peak's panel LFOs live per voice, so a chord does not move in
+                // lockstep. Each voice applies its own modulation sums.
+                let lfo1 = v.lfo1.advance(lfo1_rate, lfo1_shape, sr, lfo1_fade);
+                let lfo2 = v.lfo2.advance(lfo2_rate, lfo2_shape, sr, lfo2_fade);
+                let mut pitch_mod = 0.0;
+                let mut cutoff_mod = 0.0;
+                let mut shape_mod = 0.0;
+                let mut amp_mod = 0.0;
+                for (index, dest, depth) in routes {
+                    let value = (if index == 0 { lfo1 } else { lfo2 }) * depth;
+                    match dest {
+                        0 => pitch_mod += value,
+                        1 => cutoff_mod += value,
+                        2 => shape_mod += value,
+                        _ => amp_mod += value,
+                    }
+                }
+
+                let bend_ratio = (voicing.bend_semitones / 12.0 + pitch_mod * 12.0 / 12.0).exp2();
                 let base = v.freq * bend_ratio;
                 let nyquist = sr * 0.45;
 
+                // A very slow meander (Peak's Drift) plus a fixed per-oscillator
+                // offset (Diverge) is what keeps the NCOs from sounding sterile.
+                v.drift_phase += 0.09 / sr;
+                if v.drift_phase >= 1.0 {
+                    v.drift_phase -= 1.0;
+                }
+                let drift = (std::f32::consts::TAU * v.drift_phase).sin() * 0.62
+                    + (std::f32::consts::TAU * v.drift_phase * 2.7).sin() * 0.38;
+                let drift_ratio = (drift * voicing.drift * 12.0 / 1200.0).exp2();
+
                 let mut osc = [0.0f32; 3];
-                for (o, slot) in osc.iter_mut().enumerate() {
-                    if voicing.osc_level[o] <= 1e-4 {
-                        continue;
-                    }
-                    let f = base * voicing.osc_ratio[o];
+                for o in 0..3 {
+                    let diverge_ratio = (v.diverge[o] * voicing.diverge * 8.0 / 1200.0).exp2();
+                    let f = base * voicing.osc_ratio[o] * drift_ratio * diverge_ratio;
                     if f >= nyquist {
                         continue;
                     }
@@ -914,12 +1034,16 @@ impl Engine {
                         v.phase[o] -= 1.0;
                     }
                     let level = Bank::level_for(sr, f);
-                    let shape = (voicing.osc_shape[o] + voicing.lfo_to_shape * 2.0)
-                        .clamp(0.0, crate::wavetable::TABLES as f32 - 1.001);
-                    let a = shape.floor() as usize;
-                    let b = (a + 1).min(crate::wavetable::TABLES - 1);
-                    let morph = shape - a as f32;
-                    *slot = bank.sample_morph(a, b, morph, level, v.phase[o] as f32);
+                    let shape = (voicing.osc_shape[o] + shape_mod).clamp(-1.0, 1.0);
+
+                    // Phase modulation is Peak's FM O1>O2 / O2>O3 routing.
+                    let mut read_phase = v.phase[o] as f32;
+                    if o == 1 {
+                        read_phase += osc[0] * voicing.fm12 * 0.75;
+                    } else if o == 2 {
+                        read_phase += osc[1] * voicing.fm23 * 0.75;
+                    }
+                    osc[o] = bank.sample_shape(voicing.osc_wave[o], shape, level, read_phase);
                 }
 
                 let mut signal = osc[0] * voicing.osc_level[0]
@@ -930,23 +1054,30 @@ impl Engine {
                     signal += osc[0] * osc[1] * voicing.ring;
                 }
                 if voicing.noise > 1e-4 {
-                    signal += v.noise() * voicing.noise;
+                    signal += v.noise(noise_coeff) * voicing.noise;
                 }
 
-                // Pre-filter drive.
+                // Pre-filter overdrive, as on Peak's analogue path.
                 if voicing.drive > 1e-4 {
                     signal = (signal * drive_gain).tanh() * drive_comp;
                 }
 
-                // Filter, modulated by its envelope, velocity, keytrack and LFO.
+                // Filter: envelope, keytrack, LFO and audio-rate Osc 3 mod.
                 let key_offset = (v.note as f32 - 60.0) / 12.0 * voicing.keytrack;
                 let env_octaves = voicing.env_amt * fenv_level * 5.0;
-                let lfo_octaves = voicing.lfo_to_cutoff * 2.0;
-                let cutoff =
-                    self.cutoff_smooth.next() * (key_offset + env_octaves + lfo_octaves).exp2();
+                let lfo_octaves = cutoff_mod * 2.0;
+                let osc3_octaves = osc[2] * voicing.osc3_filter_mod * 3.0;
+                let cutoff = (base_cutoff
+                    * (key_offset + env_octaves + lfo_octaves + osc3_octaves).exp2())
+                .clamp(20.0, sr * 0.45);
+                let stage_reso = if filter_poles == 2 {
+                    voicing.reso * 0.72
+                } else {
+                    voicing.reso
+                };
                 if i % FILTER_CHUNK == 0 {
-                    v.filters[0].set(cutoff, voicing.reso, sr);
-                    v.filters[1].set(cutoff, voicing.reso, sr);
+                    v.filters[0].set(cutoff, stage_reso, sr);
+                    v.filters[1].set(cutoff, stage_reso, sr);
                 }
                 let filtered = if voicing.filter_poles == 2 {
                     let a = v.filters[0].tick(signal, voicing.filter_mode);
@@ -955,10 +1086,10 @@ impl Engine {
                     v.filters[0].tick(signal, voicing.filter_mode)
                 };
 
-                let amp = amp_level * v.velocity * (1.0 - voicing.lfo_to_amp * 0.5);
+                let amp = amp_level * v.velocity * (1.0 + amp_mod).clamp(0.0, 2.0);
                 let out = filtered * amp;
                 // Peak pans alternate voices slightly for width.
-                let pan = if v.note % 2 == 0 { 0.46 } else { 0.54 };
+                let pan = if v.note % 2 == 0 { 0.47 } else { 0.53 };
                 mix_l += out * (1.4 - pan);
                 mix_r += out * pan;
                 v.level = out;
@@ -1189,6 +1320,68 @@ mod tests {
             bent > base * 1.05,
             "bend did not raise pitch: {base} vs {bent}"
         );
+    }
+
+    #[test]
+    fn every_factory_preset_renders_finite_audio() {
+        let mut engine = Engine::new(48_000.0);
+        engine.set_bank(Bank::generate(1));
+        for preset in crate::preset::FACTORY {
+            engine.reset();
+            let patch = preset.patch();
+            engine.process(
+                &patch,
+                &[Event::NoteOn {
+                    note: 60,
+                    velocity: 0.9,
+                }],
+                &mut vec![0.0; 64],
+                &mut vec![0.0; 64],
+            );
+            let (l, r) = block(&mut engine, &patch, 96_000);
+            let energy = rms(&l);
+            assert!(
+                energy.is_finite() && energy > 1e-4,
+                "{} rendered silence (rms {energy})",
+                preset.name
+            );
+            assert!(
+                l.iter().chain(r.iter()).all(|s| s.is_finite()),
+                "{} produced a non-finite sample",
+                preset.name
+            );
+        }
+    }
+
+    #[test]
+    fn hold_keeps_the_envelope_at_full_before_decay() {
+        let mut env = Adsr::new(48_000.0);
+        env.set_times(0.001, 0.10, 0.001, 0.0, 0.05);
+        env.gate_on();
+        // 50 ms in: attack is done and the 100 ms hold is still running.
+        for _ in 0..2_400 {
+            env.next();
+        }
+        assert!(env.level > 0.99, "hold level {}", env.level);
+        // 150 ms in: the hold has ended and the 1 ms decay has reached zero.
+        for _ in 0..4_800 {
+            env.next();
+        }
+        assert!(env.level < 0.05, "decay after hold: {}", env.level);
+    }
+
+    #[test]
+    fn sample_and_hold_lfo_stays_on_one_value_per_cycle() {
+        let mut lfo = Lfo::new(7);
+        lfo.retrigger(7);
+        let mut samples = Vec::with_capacity(24_000);
+        for _ in 0..24_000 {
+            samples.push(lfo.advance(2.0, 4, 48_000.0, 0.0));
+        }
+        // 2 Hz at 48 kHz: one step every 24,000 samples, so this window holds
+        // a single value.
+        let first = samples[0];
+        assert!(samples.iter().all(|s| (*s - first).abs() < 1e-6));
     }
 
     #[test]

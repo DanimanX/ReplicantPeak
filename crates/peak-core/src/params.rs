@@ -103,19 +103,34 @@ pub enum P {
     Polyphony,
     BendRange,
     Volume,
+    // Peak fidelity pass. Appended so v1.0.0 preset arrays keep their layout.
+    Osc1ShapeAmt,
+    Osc2ShapeAmt,
+    Osc3ShapeAmt,
+    Osc3FilterMod,
+    AmpHold,
+    FilterHold,
+    Lfo1Fade,
+    Lfo2Fade,
+    Fm12,
+    Fm23,
+    Drift,
+    Diverge,
+    NoiseTone,
 }
 
 pub const WAVE_NAMES: &[&str] = &[
     "SINE", "TRI", "SAW", "SQUARE", "PULSE 25", "PULSE 12", "HARMONIC", "FORMANT", "USER A",
     "USER B", "USER C", "USER D",
 ];
-pub const FILTER_NAMES: &[&str] = &["LP 12", "LP 24", "BP 12", "HP 24"];
-pub const LFO_SHAPES: &[&str] = &["SINE", "TRI", "SAW", "SQUARE"];
+// Keep the first four entries in place: v1.0.0 presets store the index.
+pub const FILTER_NAMES: &[&str] = &["LP 12", "LP 24", "BP 12", "HP 24", "BP 24", "HP 12"];
+pub const LFO_SHAPES: &[&str] = &["SINE", "TRI", "SAW", "SQUARE", "S&H"];
 pub const LFO_DESTS: &[&str] = &["PITCH", "FILTER", "SHAPE", "AMP"];
 pub const SHAPE_NAMES: &[&str] = WAVE_NAMES;
 
 impl P {
-    pub const COUNT: usize = 47;
+    pub const COUNT: usize = 60;
 
     pub const ALL: [P; Self::COUNT] = [
         P::Osc1Level,
@@ -165,6 +180,19 @@ impl P {
         P::Polyphony,
         P::BendRange,
         P::Volume,
+        P::Osc1ShapeAmt,
+        P::Osc2ShapeAmt,
+        P::Osc3ShapeAmt,
+        P::Osc3FilterMod,
+        P::AmpHold,
+        P::FilterHold,
+        P::Lfo1Fade,
+        P::Lfo2Fade,
+        P::Fm12,
+        P::Fm23,
+        P::Drift,
+        P::Diverge,
+        P::NoiseTone,
     ];
 
     pub fn index(self) -> usize {
@@ -178,7 +206,7 @@ impl P {
             P::Osc1Level => ("osc1_level", "LEVEL", 0.0, 1.0, 0.72, Percent, false, Osc),
             P::Osc1Shape => (
                 "osc1_shape",
-                "SHAPE",
+                "WAVE",
                 0.0,
                 11.0,
                 2.0,
@@ -186,12 +214,21 @@ impl P {
                 false,
                 Osc,
             ),
-            P::Osc1Tune => ("osc1_tune", "TUNE", -24.0, 24.0, 0.0, Semitones, false, Osc),
-            P::Osc1Fine => ("osc1_fine", "FINE", -50.0, 50.0, 0.0, Cents, false, Osc),
+            P::Osc1Tune => (
+                "osc1_tune",
+                "COARSE",
+                -24.0,
+                24.0,
+                0.0,
+                Semitones,
+                false,
+                Osc,
+            ),
+            P::Osc1Fine => ("osc1_fine", "FINE", -100.0, 100.0, 0.0, Cents, false, Osc),
             P::Osc2Level => ("osc2_level", "LEVEL", 0.0, 1.0, 0.0, Percent, false, Osc),
             P::Osc2Shape => (
                 "osc2_shape",
-                "SHAPE",
+                "WAVE",
                 0.0,
                 11.0,
                 2.0,
@@ -199,12 +236,21 @@ impl P {
                 false,
                 Osc,
             ),
-            P::Osc2Tune => ("osc2_tune", "TUNE", -24.0, 24.0, 0.0, Semitones, false, Osc),
-            P::Osc2Fine => ("osc2_fine", "FINE", -50.0, 50.0, 7.0, Cents, false, Osc),
+            P::Osc2Tune => (
+                "osc2_tune",
+                "COARSE",
+                -24.0,
+                24.0,
+                0.0,
+                Semitones,
+                false,
+                Osc,
+            ),
+            P::Osc2Fine => ("osc2_fine", "FINE", -100.0, 100.0, 7.0, Cents, false, Osc),
             P::Osc3Level => ("osc3_level", "LEVEL", 0.0, 1.0, 0.0, Percent, false, Osc),
             P::Osc3Shape => (
                 "osc3_shape",
-                "SHAPE",
+                "WAVE",
                 0.0,
                 11.0,
                 2.0,
@@ -214,7 +260,7 @@ impl P {
             ),
             P::Osc3Tune => (
                 "osc3_tune",
-                "TUNE",
+                "COARSE",
                 -24.0,
                 24.0,
                 -12.0,
@@ -222,7 +268,7 @@ impl P {
                 false,
                 Osc,
             ),
-            P::Osc3Fine => ("osc3_fine", "FINE", -50.0, 50.0, 0.0, Cents, false, Osc),
+            P::Osc3Fine => ("osc3_fine", "FINE", -100.0, 100.0, 0.0, Cents, false, Osc),
             P::NoiseLevel => ("noise_level", "NOISE", 0.0, 1.0, 0.0, Percent, false, Mixer),
             P::RingLevel => ("ring_level", "RING", 0.0, 1.0, 0.0, Percent, false, Mixer),
             P::Cutoff => (
@@ -247,7 +293,7 @@ impl P {
                 "filter_type",
                 "TYPE",
                 0.0,
-                3.0,
+                5.0,
                 1.0,
                 Choice(FILTER_NAMES),
                 false,
@@ -379,6 +425,73 @@ impl P {
                 Voice,
             ),
             P::Volume => ("volume", "MASTER", -36.0, 6.0, -3.0, Db, false, Voice),
+            P::Osc1ShapeAmt => (
+                "osc1_shape_amt",
+                "SHAPE",
+                -1.0,
+                1.0,
+                0.0,
+                Percent,
+                false,
+                Osc,
+            ),
+            P::Osc2ShapeAmt => (
+                "osc2_shape_amt",
+                "SHAPE",
+                -1.0,
+                1.0,
+                0.0,
+                Percent,
+                false,
+                Osc,
+            ),
+            P::Osc3ShapeAmt => (
+                "osc3_shape_amt",
+                "SHAPE",
+                -1.0,
+                1.0,
+                0.0,
+                Percent,
+                false,
+                Osc,
+            ),
+            P::Osc3FilterMod => (
+                "osc3_filter_mod",
+                "OSC3 MOD",
+                -1.0,
+                1.0,
+                0.0,
+                Percent,
+                false,
+                Filter,
+            ),
+            P::AmpHold => ("amp_hold", "HOLD", 0.0, 5_000.0, 0.0, Ms, false, AmpEnv),
+            P::FilterHold => (
+                "filter_hold",
+                "HOLD",
+                0.0,
+                5_000.0,
+                0.0,
+                Ms,
+                false,
+                FilterEnv,
+            ),
+            P::Lfo1Fade => ("lfo1_fade", "FADE", 0.0, 5_000.0, 0.0, Ms, false, Lfo),
+            P::Lfo2Fade => ("lfo2_fade", "FADE", 0.0, 5_000.0, 0.0, Ms, false, Lfo),
+            P::Fm12 => ("fm12", "FM 1>2", 0.0, 1.0, 0.0, Percent, false, Osc),
+            P::Fm23 => ("fm23", "FM 2>3", 0.0, 1.0, 0.0, Percent, false, Osc),
+            P::Drift => ("drift", "DRIFT", 0.0, 1.0, 0.06, Percent, false, Voice),
+            P::Diverge => ("diverge", "DIVERGE", 0.0, 1.0, 0.04, Percent, false, Voice),
+            P::NoiseTone => (
+                "noise_tone",
+                "NOISE LP",
+                0.0,
+                1.0,
+                1.0,
+                Percent,
+                false,
+                Mixer,
+            ),
         };
         ParamSpec {
             id,
@@ -463,7 +576,7 @@ pub fn format(spec: ParamSpec, value: f32) -> String {
 
 /// The complete patch: one real-world value per parameter.
 ///
-/// `[f32; 47]` cannot derive serde (arrays only go to 32), so this round-trips
+/// `[f32; 60]` cannot derive serde (arrays only go to 32), so this round-trips
 /// through a slice and repairs short or long documents on load.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Patch {
@@ -615,11 +728,11 @@ mod tests {
     fn choice_parameters_snap() {
         let mut patch = Patch::default();
         patch.set_normalised(P::FilterType, 0.9);
-        assert_eq!(patch.get(P::FilterType), 3.0);
-        assert_eq!(format(P::FilterType.spec(), 3.0), "HP 24");
+        assert_eq!(patch.get(P::FilterType), 5.0);
+        assert_eq!(format(P::FilterType.spec(), 5.0), "HP 12");
         // Mid-drag values snap to the nearest option instead of drifting.
         patch.set_normalised(P::FilterType, 0.4);
-        assert_eq!(patch.get(P::FilterType), 1.0);
+        assert_eq!(patch.get(P::FilterType), 2.0);
     }
 
     #[test]
@@ -642,5 +755,7 @@ mod tests {
         assert_eq!(format(P::Volume.spec(), -3.0), "-3.0 dB");
         assert_eq!(format(P::FilterEnvAmt.spec(), 0.3), "+30%");
         assert_eq!(format(P::Osc1Shape.spec(), 2.0), "SAW");
+        assert_eq!(format(P::Osc1ShapeAmt.spec(), 0.25), "+25%");
+        assert_eq!(format(P::Lfo1Shape.spec(), 4.0), "S&H");
     }
 }

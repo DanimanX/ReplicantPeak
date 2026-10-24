@@ -14,7 +14,7 @@ That image is never executed or downloaded by the plugin: it is validated, used
 as the build fingerprint, and used as the deterministic seed for the user
 wavetables.
 
-- **Status**: v1.0.0, first release.
+- **Status**: v1.0.1, fidelity and scope update.
 - **License**: MIT for the code. The firmware is not included and not covered by
   that license (see [Firmware](#firmware)).
 
@@ -22,15 +22,24 @@ wavetables.
 
 - Peak-style panel drawn with egui: three oscillator columns, centre display,
   filter, two envelopes, LFOs, FX and the voice section.
+- **One cyberpunk wavetable scope per oscillator.** Each scope is a five-column
+  waterfall drawn as GPU-rasterised egui meshes, with neon gradients, a live
+  interpolated waveform and a phase marker. Drag a scope to sweep SHAPE; drag
+  the wave strip or scroll to change the table.
 - An 8-voice engine (up to 16) with three wavetable oscillators, noise, ring
   modulation, a resonant state-variable filter with its own envelope, two LFOs
   and a serial FX chain (distortion, chorus, delay, reverb).
-- 47 parameters shared by the engine, the host and the panel from a single
+- **Peak-faithful voice architecture**: AHDSR envelopes with HOLD, per-voice
+  free-running LFOs with FADE and S&H, five-column wavetable SHAPE, LP/BP/HP
+  filters at 12 or 24 dB, Osc 3 audio-rate filter modulation, FM O1>O2 and
+  O2>O3, oscillator Drift/Diverge and a bandwidth-limited noise source.
+- 60 parameters shared by the engine, the host and the panel from a single
   table, so the ranges cannot drift apart.
 - Firmware gate: without a valid image the plugin is silent and the editor
   draws the locked panel.
-- Mip-mapped wavetable bank: 8 factory tables and 4 user tables derived from the
-  SHA-256 of the linked firmware.
+- Mip-mapped wavetable bank: 8 factory tables plus 4 user tables derived from
+  the SHA-256 of the linked firmware. Each table is a bank of five waveforms,
+  matching Peak's SHAPE model.
 
 ## Crates
 
@@ -52,7 +61,7 @@ headers for egui/winit.
 
 ```
 cargo build -p peak-plugin      # the CLAP probe dlopens this cdylib
-cargo test --workspace          # 52 tests: engine, firmware, presets, panel, host
+cargo test --workspace          # 56 tests: engine, firmware, presets, panel, host
 cargo run -p peak-panel         # open the panel (no audio)
 ```
 
@@ -66,18 +75,20 @@ cargo xtask bundle peak-plugin --release
 README screenshot (needs `xvfb-run` when there is no display):
 
 ```
-scripts/screenshot.sh            # -> assets/panel.png
+PEAK_PANEL_PRESET=3 scripts/screenshot.sh   # -> assets/panel.png (GLASS PAD)
 ```
 
 ## Presets
 
 The display holds the preset browser: `<` and `>` step through the bank and
-`STORE` writes the current parameters as a user preset. The bank is the 12
+`STORE` writes the current parameters as a user preset. The bank is the 19
 factory presets (`INIT PATCH`, `PEAK BASS`, `WIDE SAW STACK`, `GLASS PAD`,
 `FM BELL`, `RING METAL`, `ACID LEAD`, `SUB PLUCK`, `NOISE SWEEP`,
-`WARM CHORDS`, `TAPE KEYS`, `HOLLOW FIFTHS`) followed by whatever the user has
-saved. Loading a preset goes through the host as one parameter gesture per
-control, so it is captured by automation and undo like a knob move.
+`WARM CHORDS`, `TAPE KEYS`, `HOLLOW FIFTHS`, `NEON SAW`, `FM GLASS`,
+`PULSE WIDTH`, `BANDPASS SCREAM`, `S&H VOID`, `HOLD ORGAN`, `DRIFT KEYS`)
+followed by whatever the user has saved. Loading a preset goes through the host
+as one parameter gesture per control, so it is captured by automation and undo
+like a knob move.
 
 User presets are JSON files in:
 
@@ -85,12 +96,22 @@ User presets are JSON files in:
 - macOS: `~/Library/Application Support/ReplicantPeak/presets`
 - Windows: `%APPDATA%\ReplicantPeak\presets`
 
-**These are patches for this engine, not the Peak's factory bank.** Novation
-ships its factory patches as a separate bank download in Components (see the
-1.1 and 1.2 release notes in `firmware/release-notes/`), and the firmware
-`.syx` contains no patch records: its 7,784 messages are one 15-byte header plus
-7,783 fixed 44-byte firmware frames (`F0 00 20 29 00 72 ... F7`), and a scan of
-the payload finds no preset names or parameter blocks — only code.
+**These are patches for this engine, not the Peak's factory bank.** We
+researched the free Peak banks while building this release (Novation's 1,000
+artist patches, the Anton Anru free packs, the dettenbach B+B demo, Patchstorage
+and PresetPatch). Their licences allow you to play them on a Peak, not to
+redistribute them inside another product, and Peak patch dumps are a
+proprietary binary format rather than documented JSON. So this release ships
+original patches and documents where to get the real free banks:
+[`docs/FREE_PATCHES.md`](docs/FREE_PATCHES.md). The architecture notes and
+citations behind the DSP changes are in
+[`docs/PEAK_FIDELITY.md`](docs/PEAK_FIDELITY.md).
+
+Novation ships its factory patches as a separate bank download in Components
+(see the 1.1 and 1.2 release notes in `firmware/release-notes/`), and the
+firmware `.syx` contains no patch records: its 7,784 messages are one 15-byte
+header plus 7,783 fixed 44-byte firmware frames (`F0 00 20 29 00 72 ... F7`),
+and a scan of the payload finds no preset names or parameter blocks — only code.
 
 ## Plugin formats
 

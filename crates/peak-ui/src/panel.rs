@@ -8,7 +8,7 @@
 use crate::host::{Accent, LinkStatus, PanelHost, PanelState};
 use crate::theme::*;
 use crate::widgets;
-use egui::{pos2, vec2, Align2, Color32, FontId, Id, Rect, Stroke, Ui};
+use egui::{pos2, vec2, Align2, Color32, FontId, Id, Mesh, Rect, Sense, Shape, Stroke, Ui};
 use peak_core::params::{format, from_norm, to_norm, Unit};
 use peak_core::P;
 
@@ -19,13 +19,16 @@ pub fn show(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut PanelState) {
     ui.painter()
         .rect_filled(panel, egui::CornerRadius::ZERO, BG);
     draw_grid(ui, panel);
+    // The wavetable scopes animate; ask the host for a steady 30 fps.
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(33));
     // Hover state is per-frame: last frame's knob must not stay lit.
     state.hovered = None;
 
     header(ui, host, state, layout::header(origin));
 
     let body = layout::body(origin);
-    let row1_h = 250.0;
+    let row1_h = 310.0;
     let row2_h = 220.0;
     let row3_h = body.height() - row1_h - row2_h - 2.0 * layout::GAP;
     let rows = layout::rows(body, &[row1_h, row2_h, row3_h], layout::GAP);
@@ -75,6 +78,7 @@ pub fn show(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut PanelState) {
         amp_rect,
         "AMP ENV",
         P::AmpAttack,
+        P::AmpHold,
         P::AmpDecay,
         P::AmpSustain,
         P::AmpRelease,
@@ -86,6 +90,7 @@ pub fn show(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut PanelState) {
         fenv_rect,
         "FILTER ENV",
         P::FilterAttack,
+        P::FilterHold,
         P::FilterDecay,
         P::FilterSustain,
         P::FilterRelease,
@@ -343,35 +348,440 @@ fn oscillator(
     rect: Rect,
     index: usize,
 ) {
-    let (level, shape, tune, fine) = match index {
-        0 => (P::Osc1Level, P::Osc1Shape, P::Osc1Tune, P::Osc1Fine),
-        1 => (P::Osc2Level, P::Osc2Shape, P::Osc2Tune, P::Osc2Fine),
-        _ => (P::Osc3Level, P::Osc3Shape, P::Osc3Tune, P::Osc3Fine),
+    let (level, wave, shape, tune, fine) = match index {
+        0 => (
+            P::Osc1Level,
+            P::Osc1Shape,
+            P::Osc1ShapeAmt,
+            P::Osc1Tune,
+            P::Osc1Fine,
+        ),
+        1 => (
+            P::Osc2Level,
+            P::Osc2Shape,
+            P::Osc2ShapeAmt,
+            P::Osc2Tune,
+            P::Osc2Fine,
+        ),
+        _ => (
+            P::Osc3Level,
+            P::Osc3Shape,
+            P::Osc3ShapeAmt,
+            P::Osc3Tune,
+            P::Osc3Fine,
+        ),
     };
-    let accent = accent_for(Accent::Osc);
+    let fm = match index {
+        1 => Some(P::Fm12),
+        2 => Some(P::Fm23),
+        _ => None,
+    };
+    let accent = osc_accent(index);
     let content = widgets::section(
         ui,
         rect,
         &format!("OSC {}", index + 1),
         accent,
-        Some(if index == 2 { "LOW" } else { "DIGITAL" }),
+        Some(if index == 2 {
+            "LOW / FM IN"
+        } else {
+            "NCO / GPU SCOPE"
+        }),
     );
 
-    let shape_rect = Rect::from_center_size(
-        pos2(content.center().x, content.top() + 74.0),
-        vec2(140.0, 132.0),
+    let wave_h = 16.0;
+    let view_h = 88.0;
+    let bottom_h = 74.0;
+    let gap = 4.0;
+    let shape_h = (content.height() - wave_h - view_h - bottom_h - gap * 3.0).clamp(72.0, 118.0);
+
+    let wave_rect = Rect::from_min_size(content.min, vec2(content.width(), wave_h));
+    let view_rect = Rect::from_min_size(
+        pos2(content.left(), wave_rect.bottom() + gap),
+        vec2(content.width(), view_h),
     );
+    let shape_rect = Rect::from_center_size(
+        pos2(content.center().x, view_rect.bottom() + gap + shape_h * 0.5),
+        vec2(content.width() * 0.90, shape_h),
+    );
+
+    wave_strip(ui, host, wave_rect, wave, accent);
+    wavetable_view(ui, host, state, view_rect, wave, shape, index, accent);
     param_knob(ui, host, state, shape_rect, shape, accent);
 
-    let knob_w = content.width() / 3.0;
-    let knob_y = content.bottom() - 84.0;
-    for (i, p) in [level, tune, fine].iter().enumerate() {
+    let params = [level, tune, fine, fm.unwrap_or(level)];
+    let count = if fm.is_some() { 4 } else { 3 };
+    let knob_w = content.width() / count as f32;
+    let knob_y = content.bottom() - bottom_h;
+    for (i, p) in params.iter().take(count).enumerate() {
         let r = Rect::from_min_size(
             pos2(content.left() + i as f32 * knob_w, knob_y),
-            vec2(knob_w, 84.0),
+            vec2(knob_w, bottom_h),
         );
         param_knob(ui, host, state, r, *p, accent);
     }
+}
+
+/// The compact wave selector above each scope. The arrows step one table; the
+/// middle strip can be dragged across the whole bank.
+fn wave_strip(ui: &mut Ui, host: &mut dyn PanelHost, rect: Rect, param: P, accent: Color32) {
+    let names = peak_core::params::WAVE_NAMES;
+    let count = names.len();
+    let value = host.value(param).round().clamp(0.0, (count - 1) as f32) as usize;
+    let arrow = 16.0;
+    let left = Rect::from_min_size(rect.min, vec2(arrow, rect.height()));
+    let right = Rect::from_min_size(
+        pos2(rect.right() - arrow, rect.top()),
+        vec2(arrow, rect.height()),
+    );
+    let mid = Rect::from_min_max(
+        pos2(left.right(), rect.top()),
+        pos2(right.left(), rect.bottom()),
+    );
+
+    let painter = ui.painter();
+    painter.rect_filled(rect, egui::CornerRadius::same(2), PANEL_LO);
+    painter.rect_stroke(
+        rect,
+        egui::CornerRadius::same(2),
+        Stroke::new(1.0_f32, with_alpha(EDGE_HI, 0.65)),
+        egui::StrokeKind::Inside,
+    );
+
+    let prev = ui.interact(
+        left,
+        Id::new(("wave-prev", param.spec().id)),
+        Sense::click(),
+    );
+    let next = ui.interact(
+        right,
+        Id::new(("wave-next", param.spec().id)),
+        Sense::click(),
+    );
+    let scrub = ui.interact(
+        mid,
+        Id::new(("wave-scrub", param.spec().id)),
+        Sense::click_and_drag(),
+    );
+
+    painter.text(
+        left.center(),
+        Align2::CENTER_CENTER,
+        "\u{2039}",
+        FontId::monospace(11.0),
+        if prev.hovered() { accent } else { DIM },
+    );
+    painter.text(
+        right.center(),
+        Align2::CENTER_CENTER,
+        "\u{203a}",
+        FontId::monospace(11.0),
+        if next.hovered() { accent } else { DIM },
+    );
+    painter.text(
+        mid.center(),
+        Align2::CENTER_CENTER,
+        format!(
+            "{:02}/{:02}  {}",
+            value + 1,
+            count,
+            names[value].to_uppercase()
+        ),
+        FontId::monospace(8.5),
+        accent,
+    );
+
+    let mut target = None;
+    if prev.clicked() {
+        target = Some((value + count - 1) % count);
+    }
+    if next.clicked() {
+        target = Some((value + 1) % count);
+    }
+    if scrub.dragged() {
+        let x = ui
+            .input(|i| i.pointer.interact_pos())
+            .map(|p| p.x)
+            .unwrap_or(mid.center().x);
+        let t = ((x - mid.left()) / mid.width().max(1.0)).clamp(0.0, 0.999);
+        target = Some((t * count as f32) as usize);
+    }
+    if scrub.hovered() {
+        let scroll = ui.input(|i| i.raw_scroll_delta.y);
+        if scroll.abs() > 0.1 {
+            let step = if scroll > 0.0 { 1 } else { count - 1 };
+            target = Some((value + step) % count);
+        }
+    }
+    if let Some(index) = target {
+        host.begin_edit(param);
+        host.set(param, index as f32);
+        host.end_edit(param);
+    }
+}
+
+/// A five-column wavetable waterfall. All geometry is submitted as egui meshes,
+/// so the GPU rasterises the gradients, glow layers and waveform fills.
+#[allow(clippy::too_many_arguments)]
+fn wavetable_view(
+    ui: &mut Ui,
+    host: &mut dyn PanelHost,
+    state: &mut PanelState,
+    rect: Rect,
+    wave_param: P,
+    shape_param: P,
+    index: usize,
+    accent: Color32,
+) {
+    let wave = host.value(wave_param).round() as usize;
+    let frames = host.wavetable(wave, 96);
+    let response = ui.interact(
+        rect,
+        Id::new(("wavetable-view", index)),
+        Sense::click_and_drag(),
+    );
+
+    if response.drag_started() {
+        state.engaged = Some(shape_param);
+        host.begin_edit(shape_param);
+    }
+    if response.dragged() {
+        let spec = shape_param.spec();
+        let norm = to_norm(spec, host.value(shape_param));
+        let fine = ui.input(|i| i.modifiers.shift);
+        let scale = if fine { 0.0015 } else { 0.006 };
+        host.set(
+            shape_param,
+            from_norm(spec, norm + response.drag_delta().x * scale),
+        );
+    }
+    if response.drag_stopped() {
+        state.engaged = None;
+        host.end_edit(shape_param);
+    }
+    if response.double_clicked() {
+        host.begin_edit(shape_param);
+        host.set(shape_param, 0.0);
+        host.end_edit(shape_param);
+    }
+    if response.hovered() {
+        state.hovered = Some(shape_param);
+        let scroll = ui.input(|i| i.raw_scroll_delta.y);
+        if scroll.abs() > 0.1 {
+            let count = peak_core::params::WAVE_NAMES.len();
+            let step = if scroll > 0.0 { 1 } else { count - 1 };
+            host.begin_edit(wave_param);
+            host.set(wave_param, ((wave + step) % count) as f32);
+            host.end_edit(wave_param);
+        }
+    }
+
+    let painter = ui.painter();
+    gradient_rect(
+        painter,
+        rect,
+        Color32::from_rgb(4, 9, 13),
+        Color32::from_rgb(2, 4, 7),
+    );
+
+    // Perspective floor grid.
+    let grid = with_alpha(accent, 0.11);
+    let mut row = 0;
+    while row <= 4 {
+        let t = row as f32 / 4.0;
+        let y = rect.top() + rect.height() * (0.28 + 0.68 * t);
+        let inset = rect.width() * 0.12 * (1.0 - t) + 2.0;
+        painter.line_segment(
+            [pos2(rect.left() + inset, y), pos2(rect.right() - inset, y)],
+            Stroke::new(1.0_f32, grid),
+        );
+        row += 1;
+    }
+    for i in 0..=6 {
+        let t = i as f32 / 6.0;
+        let top = pos2(
+            rect.left() + rect.width() * (0.25 + 0.5 * t),
+            rect.top() + 8.0,
+        );
+        let bottom = pos2(rect.left() + rect.width() * t, rect.bottom() - 2.0);
+        painter.line_segment(
+            [top, bottom],
+            Stroke::new(1.0_f32, with_alpha(accent, 0.07)),
+        );
+    }
+
+    if frames.len() < 2 {
+        painter.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            "NO WAVETABLE BANK",
+            FontId::monospace(8.0),
+            with_alpha(DIM, 0.9),
+        );
+        widgets::scanlines(painter, rect, 3.0, 0.12);
+        return;
+    }
+
+    let shape = host.value(shape_param).clamp(-1.0, 1.0);
+    let position = (shape + 1.0) * 0.5 * (frames.len() - 1) as f32;
+    let f0 = position.floor() as usize;
+    let f1 = (f0 + 1).min(frames.len() - 1);
+    let frac = position - f0 as f32;
+    let current: Vec<f32> = frames[f0]
+        .iter()
+        .zip(frames[f1].iter())
+        .map(|(a, b)| a + (b - a) * frac)
+        .collect();
+
+    // Waterfall: the far columns sit higher and narrower, so the five frames
+    // read as a depth stack rather than five overlapping lines.
+    let plane_top = rect.top() + 18.0;
+    let plane_bottom = rect.bottom() - 10.0;
+    let span = plane_bottom - plane_top;
+    let last = (frames.len() - 1) as f32;
+    let secondary = if accent == MAGENTA { CYAN } else { MAGENTA };
+    for frame in (0..frames.len()).rev() {
+        let t = frame as f32 / last;
+        let depth = (t - 0.5).abs() * 2.0;
+        let center_y = plane_top + span * (0.12 + 0.64 * t);
+        let amp = span * 0.115;
+        let width_scale = 0.78 + 0.22 * (1.0 - t);
+        let points = trace_points(rect, &frames[frame], center_y, amp, width_scale);
+        let color = mix(accent, secondary, t);
+        fill_trace(
+            painter,
+            &points,
+            plane_bottom,
+            with_alpha(color, 0.10 * (1.0 - depth * 0.55)),
+        );
+        painter.add(Shape::line(
+            points,
+            Stroke::new(1.0_f32, with_alpha(color, 0.22 + 0.34 * (1.0 - depth))),
+        ));
+    }
+
+    // The interpolated waveform the oscillator is actually reading.
+    let points = trace_points(rect, &current, plane_bottom - 3.0, span * 0.30, 1.0);
+    let bright = mix(accent, Color32::WHITE, 0.45);
+    painter.add(Shape::line(
+        points.clone(),
+        Stroke::new(5.0_f32, with_alpha(accent, 0.13)),
+    ));
+    painter.add(Shape::line(
+        points.clone(),
+        Stroke::new(2.0_f32, with_alpha(bright, 0.72)),
+    ));
+    painter.add(Shape::line(points.clone(), Stroke::new(1.2_f32, bright)));
+
+    // A phase marker runs along the live waveform.
+    let t = (ui.input(|i| i.time) as f32 * 0.35).rem_euclid(1.0);
+    let marker = points[(t * (points.len() - 1) as f32) as usize];
+    painter.circle_filled(marker, 5.0, with_alpha(accent, 0.16));
+    painter.circle_filled(marker, 1.8, Color32::WHITE);
+
+    // Neon sweep.
+    let sweep = ((ui.input(|i| i.time) as f32 * 0.20).rem_euclid(1.0)) * rect.width();
+    painter.line_segment(
+        [
+            pos2(rect.left() + sweep, rect.top() + 6.0),
+            pos2(rect.left() + sweep, rect.bottom() - 2.0),
+        ],
+        Stroke::new(1.0_f32, with_alpha(accent, 0.16)),
+    );
+
+    painter.text(
+        pos2(rect.left() + 5.0, rect.top() + 4.0),
+        Align2::LEFT_TOP,
+        format!("COL {:.1}/{}", position + 1.0, frames.len()),
+        FontId::monospace(7.5),
+        with_alpha(accent, 0.85),
+    );
+    painter.text(
+        pos2(rect.right() - 5.0, rect.top() + 4.0),
+        Align2::RIGHT_TOP,
+        format!("{:+.0}%", shape * 100.0),
+        FontId::monospace(7.5),
+        with_alpha(TEXT, 0.75),
+    );
+    painter.text(
+        pos2(rect.right() - 5.0, rect.bottom() - 9.0),
+        Align2::RIGHT_BOTTOM,
+        "5 COL",
+        FontId::monospace(6.5),
+        with_alpha(DIM, 0.9),
+    );
+
+    // Column indicator: the active interpolated column is lit.
+    for frame in 0..frames.len() {
+        let y = rect.top() + 20.0 + frame as f32 * 7.0;
+        let active = (position - frame as f32).abs() < 0.5;
+        let dot = Rect::from_min_size(pos2(rect.right() - 5.0, y), vec2(2.5, 4.0));
+        painter.rect_filled(
+            dot,
+            egui::CornerRadius::same(1),
+            if active {
+                accent
+            } else {
+                with_alpha(accent, 0.22)
+            },
+        );
+    }
+
+    widgets::scanlines(painter, rect, 3.0, 0.10);
+    painter.rect_stroke(
+        rect,
+        egui::CornerRadius::same(2),
+        Stroke::new(1.0_f32, with_alpha(accent, 0.55)),
+        egui::StrokeKind::Inside,
+    );
+}
+
+fn trace_points(
+    rect: Rect,
+    samples: &[f32],
+    center_y: f32,
+    amp: f32,
+    width_scale: f32,
+) -> Vec<egui::Pos2> {
+    if samples.len() < 2 {
+        return Vec::new();
+    }
+    let usable = rect.width() * width_scale;
+    let left = rect.center().x - usable * 0.5;
+    let step = usable / (samples.len() - 1) as f32;
+    samples
+        .iter()
+        .enumerate()
+        .map(|(i, s)| pos2(left + i as f32 * step, center_y - s.clamp(-1.5, 1.5) * amp))
+        .collect()
+}
+
+fn fill_trace(painter: &egui::Painter, points: &[egui::Pos2], base_y: f32, color: Color32) {
+    if points.len() < 2 {
+        return;
+    }
+    let mut mesh = Mesh::default();
+    for p in points {
+        mesh.colored_vertex(*p, color);
+        mesh.colored_vertex(pos2(p.x, base_y), Color32::TRANSPARENT);
+    }
+    for i in 0..points.len() - 1 {
+        let a = (i * 2) as u32;
+        mesh.add_triangle(a, a + 1, a + 2);
+        mesh.add_triangle(a + 1, a + 3, a + 2);
+    }
+    painter.add(Shape::mesh(mesh));
+}
+
+fn gradient_rect(painter: &egui::Painter, rect: Rect, top: Color32, bottom: Color32) {
+    let mut mesh = Mesh::default();
+    mesh.colored_vertex(rect.left_top(), top);
+    mesh.colored_vertex(rect.right_top(), top);
+    mesh.colored_vertex(rect.left_bottom(), bottom);
+    mesh.colored_vertex(rect.right_bottom(), bottom);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(1, 3, 2);
+    painter.add(Shape::mesh(mesh));
 }
 
 fn display(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut PanelState, rect: Rect) {
@@ -523,8 +933,16 @@ fn filter_section(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut PanelState,
     let accent = accent_for(Accent::Filter);
     let content = widgets::section(ui, rect, "FILTER", accent, Some("STATE VARIABLE"));
 
-    let params = [P::Cutoff, P::Reso, P::Drive, P::FilterEnvAmt, P::Keytrack];
-    let widths = [0.30, 0.175, 0.175, 0.175, 0.175];
+    let params = [
+        P::Cutoff,
+        P::Reso,
+        P::Drive,
+        P::FilterEnvAmt,
+        P::Keytrack,
+        P::Osc3FilterMod,
+        P::NoiseTone,
+    ];
+    let widths = [0.22, 0.13, 0.13, 0.13, 0.13, 0.13, 0.13];
     let mut x = content.left();
     for (p, weight) in params.iter().zip(widths) {
         let w = content.width() * weight;
@@ -564,6 +982,7 @@ fn envelope(
     rect: Rect,
     title: &str,
     attack: P,
+    hold: P,
     decay: P,
     sustain: P,
     release: P,
@@ -572,11 +991,13 @@ fn envelope(
     let content = widgets::section(ui, rect, title, accent, None);
 
     let graph = Rect::from_min_max(content.min, pos2(content.right(), content.top() + 44.0));
-    draw_env_graph(ui, graph, host, attack, decay, sustain, release, accent);
+    draw_env_graph(
+        ui, graph, host, attack, hold, decay, sustain, release, accent,
+    );
 
     let knob_y = graph.bottom() + 6.0;
-    let cell = content.width() / 4.0;
-    for (i, p) in [attack, decay, sustain, release].iter().enumerate() {
+    let cell = content.width() / 5.0;
+    for (i, p) in [attack, hold, decay, sustain, release].iter().enumerate() {
         let r = Rect::from_min_size(
             pos2(content.left() + i as f32 * cell, knob_y),
             vec2(cell, content.bottom() - knob_y),
@@ -591,6 +1012,7 @@ fn draw_env_graph(
     rect: Rect,
     host: &dyn PanelHost,
     attack: P,
+    hold: P,
     decay: P,
     sustain: P,
     release: P,
@@ -606,16 +1028,18 @@ fn draw_env_graph(
     );
     let inner = rect.shrink(4.0);
     let a = host.value(attack).max(1.0) / 1000.0;
+    let h = host.value(hold).max(0.0) / 1000.0;
     let d = host.value(decay).max(1.0) / 1000.0;
     let s = host.value(sustain);
     let r = host.value(release).max(1.0) / 1000.0;
     // A fixed 4s window keeps the graph stable while dragging; long stages clip.
-    let window = 4.0f32.max(a + d + r);
+    let window = 4.0f32.max(a + h + d + r);
     let x_at = |t: f32| inner.left() + inner.width() * (t / window).clamp(0.0, 1.0);
     let y_at = |v: f32| inner.bottom() - inner.height() * v.clamp(0.0, 1.0);
 
     let attack_end = a;
-    let decay_end = a + d;
+    let hold_end = a + h;
+    let decay_end = a + h + d;
     let release_start = decay_end + 0.6 * (window - decay_end).max(0.0);
     let _release_end = release_start + r;
 
@@ -623,12 +1047,15 @@ fn draw_env_graph(
         pos2(x_at(0.0), y_at(0.0)),
         pos2(x_at(attack_end), y_at(1.0)),
     ];
+    if h > 0.0 {
+        points.push(pos2(x_at(hold_end), y_at(1.0)));
+    }
     let decay_steps = 12;
     for i in 1..=decay_steps {
         let t = i as f32 / decay_steps as f32;
         // Exponential decay toward sustain.
         let v = 1.0 + (s - 1.0) * (1.0 - (-4.0 * t).exp()) / (1.0 - (-4.0f32).exp());
-        points.push(pos2(x_at(attack_end + d * t), y_at(v)));
+        points.push(pos2(x_at(hold_end + d * t), y_at(v)));
     }
     points.push(pos2(x_at(release_start), y_at(s)));
     for i in 1..=8 {
@@ -659,8 +1086,11 @@ fn draw_env_graph(
 fn voice_section(ui: &mut Ui, host: &mut dyn PanelHost, state: &mut PanelState, rect: Rect) {
     let accent = accent_for(Accent::Voice);
     let content = widgets::section(ui, rect, "VOICE", accent, None);
-    let cell = content.width() / 3.0;
-    for (i, p) in [P::Polyphony, P::Glide, P::BendRange].iter().enumerate() {
+    let cell = content.width() / 5.0;
+    for (i, p) in [P::Polyphony, P::Glide, P::BendRange, P::Drift, P::Diverge]
+        .iter()
+        .enumerate()
+    {
         let r = Rect::from_min_size(
             pos2(content.left() + i as f32 * cell, content.top() + 6.0),
             vec2(cell, 112.0),
@@ -693,16 +1123,28 @@ fn lfo_section(
     rect: Rect,
     index: usize,
 ) {
-    let (rate, shape, depth, dest) = if index == 1 {
-        (P::Lfo1Rate, P::Lfo1Shape, P::Lfo1Depth, P::Lfo1Dest)
+    let (rate, shape, depth, dest, fade) = if index == 1 {
+        (
+            P::Lfo1Rate,
+            P::Lfo1Shape,
+            P::Lfo1Depth,
+            P::Lfo1Dest,
+            P::Lfo1Fade,
+        )
     } else {
-        (P::Lfo2Rate, P::Lfo2Shape, P::Lfo2Depth, P::Lfo2Dest)
+        (
+            P::Lfo2Rate,
+            P::Lfo2Shape,
+            P::Lfo2Depth,
+            P::Lfo2Dest,
+            P::Lfo2Fade,
+        )
     };
     let accent = accent_for(Accent::Lfo);
     let content = widgets::section(ui, rect, &format!("LFO {index}"), accent, None);
 
-    let cell = content.width() / 3.0;
-    for (i, p) in [rate, shape, depth].iter().enumerate() {
+    let cell = content.width() / 4.0;
+    for (i, p) in [rate, shape, depth, fade].iter().enumerate() {
         let r = Rect::from_min_size(
             pos2(content.left() + i as f32 * cell, content.top() + 2.0),
             vec2(cell, 92.0),

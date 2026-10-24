@@ -7,7 +7,7 @@
 use egui::Color32;
 
 pub const PANEL_W: f32 = 1180.0;
-pub const PANEL_H: f32 = 760.0;
+pub const PANEL_H: f32 = 820.0;
 
 pub const BG: Color32 = Color32::from_rgb(5, 5, 9);
 pub const PANEL: Color32 = Color32::from_rgb(10, 10, 17);
@@ -24,6 +24,12 @@ pub const RED: Color32 = Color32::from_rgb(255, 64, 96);
 pub const TEXT: Color32 = Color32::from_rgb(206, 212, 232);
 pub const DIM: Color32 = Color32::from_rgb(108, 114, 140);
 pub const SCREEN_BG: Color32 = Color32::from_rgb(4, 12, 14);
+
+/// Each oscillator gets its own neon, so the three scopes read as separate
+/// instruments instead of three copies of the same cyan.
+pub fn osc_accent(index: usize) -> Color32 {
+    [CYAN, MAGENTA, LIME][index % 3]
+}
 
 pub fn accent_for(section: crate::host::Accent) -> Color32 {
     use crate::host::Accent::*;

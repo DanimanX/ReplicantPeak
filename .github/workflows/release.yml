@@ -15,7 +15,7 @@ on:
       tag:
         description: Existing tag to attach the bundles to
         required: true
-        default: v1.0.0
+        default: v1.0.1
 
 concurrency:
   group: release-${{ github.ref }}

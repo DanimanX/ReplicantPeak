@@ -3,8 +3,8 @@
 
 Each plugin format gets its own archive so a download is unambiguous:
 
-    ReplicantPeak-1.0.0-linux-clap.zip
-    ReplicantPeak-1.0.0-linux-vst3.zip
+    ReplicantPeak-1.0.1-linux-clap.zip
+    ReplicantPeak-1.0.1-linux-vst3.zip
     ...
 
 Unzipping an archive yields the bundle itself (`ReplicantPeak.clap` or
@@ -54,7 +54,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundled", type=Path, default=Path("target/bundled"))
     parser.add_argument("--out", type=Path, default=Path("dist"))
-    parser.add_argument("--version", required=True, help="e.g. 1.0.0")
+    parser.add_argument("--version", required=True, help="e.g. 1.0.1")
     parser.add_argument("--os", required=True, help="e.g. linux, windows, macos")
     parser.add_argument("--license", type=Path, default=Path("LICENSE"))
     args = parser.parse_args()

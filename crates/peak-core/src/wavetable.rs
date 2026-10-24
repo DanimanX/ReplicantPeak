@@ -1,15 +1,23 @@
-//! A mip-mapped wavetable bank.
+//! A mip-mapped wavetable bank built the way Peak describes its oscillators.
 //!
-//! Eight factory tables follow Peak's oscillator shapes; four "user" tables are
-//! derived deterministically from the firmware digest, so a given `.syx` always
-//! produces the same bank. Tables are band-limited by construction: each mip
-//! level is synthesised additively with half the harmonics of the level below,
-//! which keeps aliasing down without per-sample filtering.
+//! Each of the twelve tables is a bank of five waveforms, and the oscillator's
+//! SHAPE control interpolates across those five columns. Tables are band-limited
+//! by construction: every mip level is synthesised additively with half the
+//! harmonics of the level below, which keeps aliasing down without per-sample
+//! filtering.
+//!
+//! The eight factory tables are original procedural approximations of the
+//! classic Peak shapes. They are not Novation's wavetable data: the hardware's
+//! tables are proprietary and never appear in the firmware image. The four user
+//! tables are derived deterministically from the firmware digest, so a given
+//! `.syx` always produces the same bank.
 
 use std::sync::Arc;
 
 pub const TABLE_SIZE: usize = 2048;
 pub const MIP_LEVELS: usize = 10;
+/// Peak's wavetables are banks of five waveforms; SHAPE sweeps across them.
+pub const FRAMES: usize = 5;
 /// Harmonics in the widest table. Halved once per mip level.
 const MAX_HARMONICS: usize = TABLE_SIZE / 2;
 
@@ -19,20 +27,37 @@ pub const TABLES: usize = FACTORY_TABLES + USER_TABLES;
 
 #[derive(Clone)]
 struct Table {
-    /// One band-limited cycle per mip level, `TABLE_SIZE` samples each.
+    /// `FRAMES` band-limited cycles per mip level, stored back to back.
     levels: Vec<Box<[f32]>>,
 }
 
 impl Table {
     #[inline]
-    fn read(&self, level: usize, phase: f32) -> f32 {
+    fn read(&self, level: usize, frame: f32, phase: f32) -> f32 {
         let data = &self.levels[level.min(self.levels.len() - 1)];
+        let frame = frame.clamp(0.0, (FRAMES - 1) as f32);
+        let f0 = frame.floor() as usize;
+        let frac = frame - f0 as f32;
+        let f1 = (f0 + 1).min(FRAMES - 1);
+
         let x = phase.rem_euclid(1.0) * TABLE_SIZE as f32;
         let i0 = x as usize & (TABLE_SIZE - 1);
-        let frac = x - x.floor();
-        let a = data[i0];
-        let b = data[(i0 + 1) & (TABLE_SIZE - 1)];
-        a + (b - a) * frac
+        let phase_frac = x - x.floor();
+        let i1 = (i0 + 1) & (TABLE_SIZE - 1);
+
+        let read_frame = |index: usize| {
+            let base = index * TABLE_SIZE;
+            let a = data[base + i0];
+            let b = data[base + i1];
+            a + (b - a) * phase_frac
+        };
+
+        let a = read_frame(f0);
+        if f1 == f0 || frac <= 0.0 {
+            a
+        } else {
+            a + (read_frame(f1) - a) * frac
+        }
     }
 }
 
@@ -68,38 +93,85 @@ impl Bank {
         level.min(MIP_LEVELS - 1)
     }
 
+    /// Read one table at an explicit frame position (0..=4).
     #[inline]
-    pub fn sample(&self, table: usize, level: usize, phase: f32) -> f32 {
-        self.tables[table % self.tables.len()].read(level, phase)
+    pub fn sample(&self, table: usize, frame: f32, level: usize, phase: f32) -> f32 {
+        self.tables[table % self.tables.len()].read(level, frame, phase)
     }
 
-    /// Crossfade between two neighbouring tables, which is what the SHAPE knob
-    /// sweeps through.
+    /// Read a table with Peak's bipolar SHAPE control: -1 is column 0, 0 is the
+    /// middle column, +1 is column 4.
     #[inline]
-    pub fn sample_morph(&self, a: usize, b: usize, morph: f32, level: usize, phase: f32) -> f32 {
-        let sa = self.sample(a, level, phase);
+    pub fn sample_shape(&self, table: usize, shape: f32, level: usize, phase: f32) -> f32 {
+        let frame = (shape.clamp(-1.0, 1.0) + 1.0) * 0.5 * (FRAMES - 1) as f32;
+        self.sample(table, frame, level, phase)
+    }
+
+    /// Crossfade between two table numbers at the same SHAPE position. This is
+    /// what the oscillator does when the wave selector is between detents.
+    #[inline]
+    pub fn sample_morph(
+        &self,
+        a: usize,
+        b: usize,
+        morph: f32,
+        shape: f32,
+        level: usize,
+        phase: f32,
+    ) -> f32 {
+        let sa = self.sample_shape(a, shape, level, phase);
         if b == a || morph <= 0.0 {
             return sa;
         }
-        let sb = self.sample(b, level, phase);
+        let sb = self.sample_shape(b, shape, level, phase);
         sa + (sb - sa) * morph
     }
 
-    /// One cycle of a table at the widest mip level, for the panel's scope.
-    pub fn cycle(&self, table: usize) -> &[f32] {
-        &self.tables[table % self.tables.len()].levels[0]
+    /// One cycle of one frame, at the widest mip level, for the panel's scope.
+    pub fn cycle(&self, table: usize, frame: usize) -> &[f32] {
+        let data = &self.tables[table % self.tables.len()].levels[0];
+        let frame = frame.min(FRAMES - 1);
+        &data[frame * TABLE_SIZE..(frame + 1) * TABLE_SIZE]
     }
 
-    /// Build the whole bank. Costs a few tens of milliseconds; run it off the
+    /// All five frames of a table, downsampled for a GUI scope. Allocating here
+    /// is fine: this is only called by the editor, never by `process()`.
+    pub fn cycles(&self, table: usize, samples: usize) -> Vec<Vec<f32>> {
+        let samples = samples.clamp(2, TABLE_SIZE);
+        (0..FRAMES)
+            .map(|frame| {
+                let cycle = self.cycle(table, frame);
+                (0..samples)
+                    .map(|i| {
+                        let x = i as f32 / samples as f32 * TABLE_SIZE as f32;
+                        let i0 = x as usize & (TABLE_SIZE - 1);
+                        let i1 = (i0 + 1) & (TABLE_SIZE - 1);
+                        let frac = x - x.floor();
+                        cycle[i0] + (cycle[i1] - cycle[i0]) * frac
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The interpolated waveform the oscillator is currently playing.
+    pub fn morph_cycle(&self, table: usize, shape: f32, samples: usize) -> Vec<f32> {
+        let samples = samples.clamp(2, TABLE_SIZE);
+        (0..samples)
+            .map(|i| self.sample_shape(table, shape, 0, i as f32 / samples as f32))
+            .collect()
+    }
+
+    /// Build the whole bank. Costs a few hundred milliseconds; run it off the
     /// audio thread.
     pub fn generate(seed: u64) -> Arc<Bank> {
         let mut tables = Vec::with_capacity(TABLES);
-        for spec in factory_specs().iter() {
-            tables.push(synth(spec));
+        for frames in factory_specs() {
+            tables.push(synth(&frames));
         }
         let mut rng = SplitMix64::new(seed);
         for _ in 0..USER_TABLES {
-            tables.push(synth(&user_spec(&mut rng)));
+            tables.push(synth(&user_frames(&mut rng)));
         }
         Arc::new(Bank { tables, seed })
     }
@@ -110,7 +182,6 @@ struct Harmonics {
     amps: Vec<(usize, f32)>,
     /// Per-harmonic phase offset in cycles; used by the seeded user tables.
     phases: Vec<f32>,
-    tilt: f32,
 }
 
 impl Harmonics {
@@ -118,61 +189,175 @@ impl Harmonics {
         Self {
             amps: Vec::new(),
             phases: Vec::new(),
-            tilt: 1.0,
+        }
+    }
+
+    fn add(&mut self, h: usize, amp: f32) {
+        if amp.abs() > 1e-5 && h < MAX_HARMONICS {
+            self.amps.push((h, amp));
         }
     }
 }
 
-fn factory_specs() -> [Harmonics; FACTORY_TABLES] {
-    let mut sine = Harmonics::new();
-    sine.amps.push((1, 1.0));
+fn sine_frame() -> Harmonics {
+    let mut spec = Harmonics::new();
+    spec.add(1, 1.0);
+    for (h, a) in [(2, 0.16), (3, 0.09), (4, 0.03)] {
+        spec.add(h, a);
+    }
+    spec
+}
 
-    let mut tri = Harmonics::new();
-    for h in (1..MAX_HARMONICS).step_by(2) {
+fn triangle_frame(limit: usize, even: f32) -> Harmonics {
+    let mut spec = Harmonics::new();
+    for h in (1..limit).step_by(2) {
         let sign = if (h / 2) % 2 == 0 { 1.0 } else { -1.0 };
-        tri.amps.push((h, sign / (h * h) as f32));
+        spec.add(h, sign / (h * h) as f32);
     }
-
-    let mut saw = Harmonics::new();
-    for h in 1..MAX_HARMONICS {
-        saw.amps.push((h, 1.0 / h as f32));
-    }
-
-    let mut square = Harmonics::new();
-    for h in (1..MAX_HARMONICS).step_by(2) {
-        square.amps.push((h, 1.0 / h as f32));
-    }
-
-    let mut p25 = Harmonics::new();
-    let mut p12 = Harmonics::new();
-    for h in 1..MAX_HARMONICS {
-        p25.amps.push((h, pulse_amp(h, 0.25)));
-        p12.amps.push((h, pulse_amp(h, 0.12)));
-    }
-
-    let mut organ = Harmonics::new();
-    for (h, a) in [
-        (1, 1.0),
-        (2, 0.55),
-        (3, 0.42),
-        (4, 0.30),
-        (6, 0.22),
-        (8, 0.16),
-        (12, 0.1),
-    ] {
-        organ.amps.push((h, a));
-    }
-
-    let mut formant = Harmonics::new();
-    for h in 1..96 {
-        let f = h as f32;
-        let a = gauss(f, 4.0, 2.2) + 0.7 * gauss(f, 11.0, 3.0) + 0.35 * gauss(f, 20.0, 4.0);
-        if a > 1e-3 {
-            formant.amps.push((h, a / f.sqrt()));
+    if even > 0.0 {
+        for h in (2..limit).step_by(2) {
+            spec.add(h, even / (h * h) as f32);
         }
     }
+    spec
+}
 
-    [sine, tri, saw, square, p25, p12, organ, formant]
+fn saw_frame(limit: usize, tilt: f32, even_boost: f32) -> Harmonics {
+    let mut spec = Harmonics::new();
+    for h in 1..limit {
+        let even = if h % 2 == 0 { 1.0 + even_boost } else { 1.0 };
+        spec.add(h, even / (h as f32).powf(tilt));
+    }
+    spec
+}
+
+fn square_frame(limit: usize, tilt: f32, even: f32) -> Harmonics {
+    let mut spec = Harmonics::new();
+    for h in (1..limit).step_by(2) {
+        spec.add(h, 1.0 / (h as f32).powf(tilt));
+    }
+    if even > 0.0 {
+        for h in (2..limit).step_by(2) {
+            spec.add(h, even / h as f32);
+        }
+    }
+    spec
+}
+
+fn pulse_frame(duty: f32) -> Harmonics {
+    let mut spec = Harmonics::new();
+    for h in 1..MAX_HARMONICS {
+        let amp = pulse_amp(h, duty);
+        spec.add(h, amp);
+    }
+    spec
+}
+
+fn harmonic_frame(tilt: f32) -> Harmonics {
+    let mut spec = Harmonics::new();
+    for h in 1..512 {
+        spec.add(h, 1.0 / (h as f32).powf(tilt));
+    }
+    spec
+}
+
+fn formant_frame(center: f32) -> Harmonics {
+    let mut spec = Harmonics::new();
+    for h in 1..256 {
+        let f = h as f32;
+        let a = gauss(f, center, center * 0.35) + 0.55 * gauss(f, center * 2.3, center * 0.5);
+        if a > 1e-3 {
+            spec.add(h, a / f.sqrt());
+        }
+    }
+    spec
+}
+
+fn factory_specs() -> Vec<[Harmonics; FRAMES]> {
+    let mut specs = Vec::with_capacity(FACTORY_TABLES);
+
+    // SINE: a clean centre column with progressively more edge either side.
+    specs.push(std::array::from_fn(|frame| match frame {
+        0 => sine_frame(),
+        1 => {
+            let mut s = Harmonics::new();
+            s.add(1, 1.0);
+            s.add(3, 0.04);
+            s
+        }
+        2 => {
+            let mut s = Harmonics::new();
+            s.add(1, 1.0);
+            s
+        }
+        3 => {
+            let mut s = Harmonics::new();
+            s.add(1, 1.0);
+            s.add(3, 0.18);
+            s.add(5, 0.08);
+            s
+        }
+        _ => {
+            let mut s = Harmonics::new();
+            s.add(1, 1.0);
+            s.add(2, 0.24);
+            s.add(3, 0.30);
+            s.add(4, 0.14);
+            s.add(5, 0.08);
+            s
+        }
+    }));
+
+    // TRI: the centre is the classic triangle; the sides bend toward saw and
+    // square spectra.
+    specs.push(std::array::from_fn(|frame| match frame {
+        0 => triangle_frame(17, 0.0),
+        1 => triangle_frame(64, 0.0),
+        2 => triangle_frame(MAX_HARMONICS, 0.0),
+        3 => triangle_frame(MAX_HARMONICS, 0.10),
+        _ => square_frame(MAX_HARMONICS, 1.0, 0.0),
+    }));
+
+    // SAW: soft at the bottom of the SHAPE range, dense and bright at the top.
+    specs.push(std::array::from_fn(|frame| match frame {
+        0 => saw_frame(17, 1.0, 0.0),
+        1 => saw_frame(64, 1.0, 0.0),
+        2 => saw_frame(MAX_HARMONICS, 1.0, 0.0),
+        3 => saw_frame(MAX_HARMONICS, 0.92, 0.20),
+        _ => saw_frame(MAX_HARMONICS, 0.80, 0.0),
+    }));
+
+    // SQUARE: the centre is a true 1:1 square; the extremes add even harmonics
+    // and high-end bite.
+    specs.push(std::array::from_fn(|frame| match frame {
+        0 => square_frame(17, 1.0, 0.0),
+        1 => square_frame(64, 1.0, 0.0),
+        2 => square_frame(MAX_HARMONICS, 1.0, 0.0),
+        3 => square_frame(MAX_HARMONICS, 1.0, 0.10),
+        _ => square_frame(MAX_HARMONICS, 0.82, 0.0),
+    }));
+
+    // PULSE 25 / PULSE 12: SHAPE is pulse width. Centre columns match the name.
+    specs.push(std::array::from_fn(|frame| {
+        let duty = [0.50, 0.36, 0.25, 0.15, 0.08][frame];
+        pulse_frame(duty)
+    }));
+    specs.push(std::array::from_fn(|frame| {
+        let duty = [0.40, 0.25, 0.12, 0.06, 0.03][frame];
+        pulse_frame(duty)
+    }));
+
+    // HARMONIC: a full spectrum whose tilt changes across columns.
+    specs.push(std::array::from_fn(|frame| {
+        harmonic_frame(1.0 + frame as f32 * 0.22)
+    }));
+
+    // FORMANT: a moving vowel-like peak.
+    specs.push(std::array::from_fn(|frame| {
+        formant_frame([4.0, 7.0, 11.0, 16.0, 22.0][frame])
+    }));
+
+    specs
 }
 
 fn pulse_amp(h: usize, duty: f32) -> f32 {
@@ -184,57 +369,75 @@ fn gauss(x: f32, mu: f32, sigma: f32) -> f32 {
     (-0.5 * ((x - mu) / sigma).powi(2)).exp()
 }
 
-fn user_spec(rng: &mut SplitMix64) -> Harmonics {
-    let mut spec = Harmonics::new();
+fn user_frames(rng: &mut SplitMix64) -> [Harmonics; FRAMES] {
     let roll = rng.next_f32();
     let limit = 24 + (roll * 56.0) as usize;
-    for h in 1..=limit {
-        let amp = rng.next_f32().powf(2.2) / (h as f32).powf(1.25);
-        if amp > 1e-4 {
-            spec.amps.push((h, amp));
-            spec.phases.push(rng.next_f32());
+    let base: Vec<(usize, f32, f32)> = (1..=limit)
+        .map(|h| {
+            (
+                h,
+                rng.next_f32().powf(2.2) / (h as f32).powf(1.25),
+                rng.next_f32(),
+            )
+        })
+        .collect();
+
+    std::array::from_fn(|frame| {
+        let mut spec = Harmonics::new();
+        let tilt = 0.85 + frame as f32 * 0.14;
+        for &(h, amp, phase) in &base {
+            let jitter = 0.65 + 0.35 * rng.next_f32();
+            spec.add(h, amp * jitter / tilt);
+            spec.phases.push(phase + frame as f32 * 0.08);
         }
-    }
-    spec
+        spec
+    })
 }
 
-/// Additive synthesis of one table, one mip level at a time.
-fn synth(spec: &Harmonics) -> Table {
+/// Additive synthesis of one table, one mip level at a time. Each frame is
+/// normalised independently so morphing never produces a loudness jump.
+fn synth(frames: &[Harmonics; FRAMES]) -> Table {
     let mut levels = Vec::with_capacity(MIP_LEVELS);
     for level in 0..MIP_LEVELS {
         let limit = (MAX_HARMONICS >> level).max(1);
-        let mut buf = vec![0.0f32; TABLE_SIZE];
-        for (i, &(h, amp)) in spec.amps.iter().enumerate() {
-            if h > limit {
-                break;
-            }
-            let phase0 = spec.phases.get(i).copied().unwrap_or(0.0) * std::f32::consts::TAU;
-            let w = std::f32::consts::TAU * h as f32 / TABLE_SIZE as f32;
-            // Rotate a unit complex number instead of calling sin() per sample.
-            let (mut c, mut s) = (phase0.cos(), phase0.sin());
-            let (dw_c, dw_s) = (w.cos(), w.sin());
-            let gain = amp / spec.tilt;
-            for sample in buf.iter_mut() {
-                *sample += s * gain;
-                let nc = c * dw_c - s * dw_s;
-                let ns = s * dw_c + c * dw_s;
-                c = nc;
-                s = ns;
+        let mut buf = vec![0.0f32; FRAMES * TABLE_SIZE];
+
+        for (frame, spec) in frames.iter().enumerate() {
+            let base = frame * TABLE_SIZE;
+            for (i, &(h, amp)) in spec.amps.iter().enumerate() {
+                if h > limit {
+                    break;
+                }
+                let phase0 = spec.phases.get(i).copied().unwrap_or(0.0) * std::f32::consts::TAU;
+                let w = std::f32::consts::TAU * h as f32 / TABLE_SIZE as f32;
+                // Rotate a unit complex number instead of calling sin() per sample.
+                let (mut c, mut s) = (phase0.cos(), phase0.sin());
+                let (dw_c, dw_s) = (w.cos(), w.sin());
+                for sample in buf[base..base + TABLE_SIZE].iter_mut() {
+                    *sample += s * amp;
+                    let nc = c * dw_c - s * dw_s;
+                    let ns = s * dw_c + c * dw_s;
+                    c = nc;
+                    s = ns;
+                }
             }
         }
 
-        // Remove DC and normalise, so every table arrives at a comparable level
-        // and the SHAPE knob does not jump in loudness.
-        let mean = buf.iter().sum::<f32>() / TABLE_SIZE as f32;
-        let mut peak = 0.0f32;
-        for sample in buf.iter_mut() {
-            *sample -= mean;
-            peak = peak.max(sample.abs());
-        }
-        if peak > 0.0 {
-            let scale = 0.99 / peak;
-            for sample in buf.iter_mut() {
-                *sample *= scale;
+        // Remove DC and normalise each frame separately.
+        for frame in 0..FRAMES {
+            let base = frame * TABLE_SIZE;
+            let slice = &mut buf[base..base + TABLE_SIZE];
+            let mean = slice.iter().sum::<f32>() / TABLE_SIZE as f32;
+            let mut peak = 0.0f32;
+            for sample in slice.iter_mut() {
+                *sample -= mean;
+                peak = peak.max(sample.abs());
+            }
+            if peak > 0.0 {
+                let scale = 0.99 / peak;
+                for sample in slice.iter_mut() {
+                    *sample *= scale;
+                }
             }
         }
         levels.push(buf.into_boxed_slice());
@@ -288,7 +491,9 @@ mod tests {
         let bank = Bank::generate(42);
         assert_eq!(bank.len(), TABLES);
         for t in 0..TABLES {
-            assert_eq!(bank.cycle(t).len(), TABLE_SIZE);
+            for frame in 0..FRAMES {
+                assert_eq!(bank.cycle(t, frame).len(), TABLE_SIZE);
+            }
         }
     }
 
@@ -296,15 +501,26 @@ mod tests {
     fn tables_are_finite_dc_free_and_normalised() {
         let bank = Bank::generate(7);
         for t in 0..TABLES {
-            for level in 0..MIP_LEVELS {
-                let mut peak = 0.0f32;
-                for i in 0..TABLE_SIZE {
-                    let s = bank.sample(t, level, i as f32 / TABLE_SIZE as f32);
-                    assert!(s.is_finite(), "table {t} level {level} is not finite");
-                    peak = peak.max(s.abs());
+            for frame in 0..FRAMES {
+                for level in 0..MIP_LEVELS {
+                    let mut peak = 0.0f32;
+                    for i in 0..TABLE_SIZE {
+                        let s = bank.sample(t, frame as f32, level, i as f32 / TABLE_SIZE as f32);
+                        assert!(
+                            s.is_finite(),
+                            "table {t} frame {frame} level {level} is not finite"
+                        );
+                        peak = peak.max(s.abs());
+                    }
+                    assert!(
+                        peak <= 1.0,
+                        "table {t} frame {frame} level {level} peak {peak}"
+                    );
+                    assert!(
+                        peak > 0.2,
+                        "table {t} frame {frame} level {level} is nearly silent"
+                    );
                 }
-                assert!(peak <= 1.0, "table {t} level {level} peak {peak}");
-                assert!(peak > 0.2, "table {t} level {level} is nearly silent");
             }
         }
     }
@@ -312,14 +528,15 @@ mod tests {
     #[test]
     fn factory_tables_carry_the_right_harmonics() {
         let bank = Bank::generate(1);
-        // SINE: fundamental only.
-        let sine = bank.cycle(0);
+
+        // SINE: the centre column is the fundamental only.
+        let sine = bank.cycle(0, 2);
         assert!(bin_magnitude(sine, 1) > 0.9);
         assert!(bin_magnitude(sine, 2) < 1e-3);
         assert!(bin_magnitude(sine, 3) < 1e-3);
 
         // SAW: 1/h across the spectrum.
-        let saw = bank.cycle(2);
+        let saw = bank.cycle(2, 2);
         let h1 = bin_magnitude(saw, 1);
         for h in [2, 3, 4, 8] {
             let expected = h1 / h as f32;
@@ -330,10 +547,27 @@ mod tests {
         }
 
         // SQUARE: odd harmonics only.
-        let square = bank.cycle(3);
+        let square = bank.cycle(3, 2);
         assert!(bin_magnitude(square, 2) < 1e-3);
         assert!(bin_magnitude(square, 4) < 1e-3);
         assert!(bin_magnitude(square, 5) > 0.1);
+    }
+
+    #[test]
+    fn shape_sweeps_all_five_frames() {
+        let bank = Bank::generate(1);
+        let phase = 0.25;
+        let first = bank.sample(0, 0.0, 0, phase);
+        let centre = bank.sample(0, 2.0, 0, phase);
+        let last = bank.sample(0, 4.0, 0, phase);
+        assert_eq!(bank.sample_shape(0, -1.0, 0, phase), first);
+        assert_eq!(bank.sample_shape(0, 0.0, 0, phase), centre);
+        assert_eq!(bank.sample_shape(0, 1.0, 0, phase), last);
+        // The sine table is pure at the centre and coloured at the edges.
+        let expected = 0.99 * (phase * std::f32::consts::TAU).sin();
+        assert!((centre - expected).abs() < 0.02);
+        assert!((first - centre).abs() > 1e-3);
+        assert!((last - centre).abs() > 1e-3);
     }
 
     #[test]
@@ -362,28 +596,32 @@ mod tests {
         let c = Bank::generate(0xDEAD_BEE0);
         assert_eq!(a.seed(), b.seed());
         for t in FACTORY_TABLES..TABLES {
-            for (x, y) in a.cycle(t).iter().zip(b.cycle(t).iter()) {
-                assert_eq!(x, y, "same seed must produce the same bank");
+            for frame in 0..FRAMES {
+                for (x, y) in a.cycle(t, frame).iter().zip(b.cycle(t, frame).iter()) {
+                    assert_eq!(x, y, "same seed must produce the same bank");
+                }
             }
         }
         // A different digest changes at least one user table.
         let differs = (FACTORY_TABLES..TABLES).any(|t| {
-            a.cycle(t)
-                .iter()
-                .zip(c.cycle(t).iter())
-                .any(|(x, y)| x != y)
+            (0..FRAMES).any(|frame| {
+                a.cycle(t, frame)
+                    .iter()
+                    .zip(c.cycle(t, frame).iter())
+                    .any(|(x, y)| x != y)
+            })
         });
         assert!(differs, "different seeds must change the user tables");
     }
 
     #[test]
-    fn morph_interpolates_between_tables() {
+    fn morph_interpolates_between_frames() {
         let bank = Bank::generate(3);
         let phase = 0.25;
-        let a = bank.sample(0, 0, phase);
-        let b = bank.sample(2, 0, phase);
-        let mid = bank.sample_morph(0, 2, 0.5, 0, phase);
+        let a = bank.sample(0, 1.0, 0, phase);
+        let b = bank.sample(0, 2.0, 0, phase);
+        let mid = bank.sample(0, 1.5, 0, phase);
         assert!(((a + b) * 0.5 - mid).abs() < 1e-6);
-        assert_eq!(bank.sample_morph(0, 2, 0.0, 0, phase), a);
+        assert_eq!(bank.sample(0, 1.0, 0, phase), a);
     }
 }

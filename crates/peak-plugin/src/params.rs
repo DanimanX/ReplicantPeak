@@ -116,6 +116,32 @@ pub struct PeakParams {
     pub bend_range: FloatParam,
     #[id = "volume"]
     pub volume: FloatParam,
+    #[id = "osc1_shape_amt"]
+    pub osc1_shape_amt: FloatParam,
+    #[id = "osc2_shape_amt"]
+    pub osc2_shape_amt: FloatParam,
+    #[id = "osc3_shape_amt"]
+    pub osc3_shape_amt: FloatParam,
+    #[id = "osc3_filter_mod"]
+    pub osc3_filter_mod: FloatParam,
+    #[id = "amp_hold"]
+    pub amp_hold: FloatParam,
+    #[id = "filter_hold"]
+    pub filter_hold: FloatParam,
+    #[id = "lfo1_fade"]
+    pub lfo1_fade: FloatParam,
+    #[id = "lfo2_fade"]
+    pub lfo2_fade: FloatParam,
+    #[id = "fm12"]
+    pub fm12: FloatParam,
+    #[id = "fm23"]
+    pub fm23: FloatParam,
+    #[id = "drift"]
+    pub drift: FloatParam,
+    #[id = "diverge"]
+    pub diverge: FloatParam,
+    #[id = "noise_tone"]
+    pub noise_tone: FloatParam,
 }
 
 impl Default for PeakParams {
@@ -170,6 +196,19 @@ impl Default for PeakParams {
             polyphony: make_param(P::Polyphony),
             bend_range: make_param(P::BendRange),
             volume: make_param(P::Volume),
+            osc1_shape_amt: make_param(P::Osc1ShapeAmt),
+            osc2_shape_amt: make_param(P::Osc2ShapeAmt),
+            osc3_shape_amt: make_param(P::Osc3ShapeAmt),
+            osc3_filter_mod: make_param(P::Osc3FilterMod),
+            amp_hold: make_param(P::AmpHold),
+            filter_hold: make_param(P::FilterHold),
+            lfo1_fade: make_param(P::Lfo1Fade),
+            lfo2_fade: make_param(P::Lfo2Fade),
+            fm12: make_param(P::Fm12),
+            fm23: make_param(P::Fm23),
+            drift: make_param(P::Drift),
+            diverge: make_param(P::Diverge),
+            noise_tone: make_param(P::NoiseTone),
         }
     }
 }
@@ -224,6 +263,19 @@ impl PeakParams {
             P::Polyphony => &self.polyphony,
             P::BendRange => &self.bend_range,
             P::Volume => &self.volume,
+            P::Osc1ShapeAmt => &self.osc1_shape_amt,
+            P::Osc2ShapeAmt => &self.osc2_shape_amt,
+            P::Osc3ShapeAmt => &self.osc3_shape_amt,
+            P::Osc3FilterMod => &self.osc3_filter_mod,
+            P::AmpHold => &self.amp_hold,
+            P::FilterHold => &self.filter_hold,
+            P::Lfo1Fade => &self.lfo1_fade,
+            P::Lfo2Fade => &self.lfo2_fade,
+            P::Fm12 => &self.fm12,
+            P::Fm23 => &self.fm23,
+            P::Drift => &self.drift,
+            P::Diverge => &self.diverge,
+            P::NoiseTone => &self.noise_tone,
         }
     }
 
@@ -270,16 +322,19 @@ fn param_name(p: P) -> String {
         id if id.starts_with("osc1_") => "OSC 1",
         id if id.starts_with("osc2_") => "OSC 2",
         id if id.starts_with("osc3_") => "OSC 3",
-        "noise_level" | "ring_level" => "MIXER",
+        "noise_level" | "ring_level" | "noise_tone" => "MIXER",
         "cutoff" | "reso" | "drive" | "filter_env" | "keytrack" | "filter_type" => "FILTER",
         id if id.starts_with("amp_") => "AMP ENV",
-        "filter_attack" | "filter_decay" | "filter_sustain" | "filter_release" => "FILTER ENV",
+        "filter_attack" | "filter_decay" | "filter_sustain" | "filter_release" | "filter_hold" => {
+            "FILTER ENV"
+        }
         id if id.starts_with("lfo1_") => "LFO 1",
         id if id.starts_with("lfo2_") => "LFO 2",
         id if id.starts_with("delay_") => "DELAY",
         id if id.starts_with("reverb_") => "REVERB",
         "dist" | "chorus" => "FX",
-        "glide" | "polyphony" | "bend_range" => "VOICE",
+        "glide" | "polyphony" | "bend_range" | "drift" | "diverge" => "VOICE",
+        "fm12" | "fm23" => "OSC FM",
         _ => "MASTER",
     };
     format!("{prefix} {}", spec.label)

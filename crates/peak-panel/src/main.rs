@@ -175,14 +175,16 @@ impl PanelHost for Preview {
         let Some(bank) = &self.bank else {
             return Vec::new();
         };
-        let shape = self.patch.get(P::Osc1Shape);
-        let a = (shape.floor() as usize).min(peak_core::wavetable::TABLES - 1);
-        let b = (a + 1).min(peak_core::wavetable::TABLES - 1);
-        let morph = shape - a as f32;
-        let samples = 128;
-        (0..samples)
-            .map(|i| bank.sample_morph(a, b, morph, 0, i as f32 / samples as f32))
-            .collect()
+        let wave = self.patch.get(P::Osc1Shape).round() as usize;
+        let shape = self.patch.get(P::Osc1ShapeAmt);
+        bank.morph_cycle(wave, shape, 128)
+    }
+
+    fn wavetable(&self, wave: usize, samples: usize) -> Vec<Vec<f32>> {
+        match &self.bank {
+            Some(bank) => bank.cycles(wave, samples),
+            None => Vec::new(),
+        }
     }
 
     fn active_voices(&self) -> usize {
