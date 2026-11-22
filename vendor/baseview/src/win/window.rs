@@ -6,7 +6,7 @@ use winapi::um::ole2::{OleInitialize, RegisterDragDrop, RevokeDragDrop};
 use winapi::um::oleidl::LPDROPTARGET;
 use winapi::um::winuser::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetDpiForWindow, GetFocus, GetMessageW, GetWindowLongPtrW, LoadCursorW, PostMessageW,
+    GetDpiForWindow, GetFocus, GetMessageW, IsWindow, GetWindowLongPtrW, LoadCursorW, PostMessageW,
     RegisterClassW, ReleaseCapture, SetCapture, SetCursor, SetFocus, SetProcessDpiAwarenessContext,
     SetTimer, SetWindowLongPtrW, SetWindowPos, TrackMouseEvent, TranslateMessage, UnregisterClassW,
     CS_OWNDC, GET_XBUTTON_WPARAM, GWLP_USERDATA, HTCLIENT, IDC_ARROW, MSG, SWP_NOMOVE,
@@ -611,15 +611,28 @@ impl Window<'_> {
         unsafe {
             let mut msg: MSG = std::mem::zeroed();
 
+            // ReplicantPeak patch: pump *all* messages of this thread.
+            //
+            // Filtering on `hwnd` left every message for other windows of the
+            // thread in the queue, including OLE's hidden apartment window.
+            // Cross-process COM calls into this STA thread arrive there, so
+            // IDropTarget::DragEnter from Explorer was never serviced: Explorer
+            // hung while dragging and drops never arrived. Without the filter
+            // the loop has to stop on its own once the window is gone (before,
+            // GetMessageW failed on the invalid handle) or on WM_QUIT.
             loop {
-                let status = GetMessageW(&mut msg, hwnd, 0, 0);
+                let status = GetMessageW(&mut msg, null_mut(), 0, 0);
 
-                if status == -1 {
+                if status == -1 || status == 0 {
                     break;
                 }
 
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
+
+                if IsWindow(hwnd) == 0 {
+                    break;
+                }
             }
         }
     }
