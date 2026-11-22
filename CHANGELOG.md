@@ -3,6 +3,12 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Windows: text fields accepted no keyboard input** ([#6](https://github.com/DanimanX/ReplicantPeak/issues/6)). The editor is a child window, and clicking it did not give it keyboard focus, so every key went to the parent window and was dropped. This made the firmware path field and the "IMPORT .SYX" path field unusable. The editor now takes keyboard focus when it is clicked (patch in `vendor/egui-baseview/src/window.rs`).
+
 ## [1.0.8] — 2026-10-24
 
 ### Added

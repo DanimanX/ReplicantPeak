@@ -407,7 +407,11 @@ where
         }
     }
 
-    fn on_event(&mut self, _window: &mut Window, event: Event) -> EventStatus {
+    fn on_event(&mut self, window: &mut Window, event: Event) -> EventStatus {
+        // Only the Windows focus fix below needs the window.
+        #[cfg(not(target_os = "windows"))]
+        let _ = window;
+
         match &event {
             baseview::Event::Mouse(event) => match event {
                 baseview::MouseEvent::CursorMoved {
@@ -422,6 +426,21 @@ where
                 }
                 baseview::MouseEvent::ButtonPressed { button, modifiers } => {
                     self.update_modifiers(modifiers);
+
+                    // ReplicantPeak patch: keyboard focus on Windows.
+                    //
+                    // The editor is a WS_CHILD window. Windows sends mouse
+                    // messages to the window under the cursor, but key messages
+                    // only to the window holding keyboard focus, and clicking a
+                    // child does not give it focus. Without this, every key went
+                    // to the parent window (which ignores them), so text fields
+                    // never received input. baseview does not handle
+                    // WM_SETFOCUS / WM_KILLFOCUS, so calling SetFocus here
+                    // cannot re-enter this handler.
+                    #[cfg(target_os = "windows")]
+                    if !window.has_focus() {
+                        window.focus();
+                    }
 
                     if let Some(pos) = self.pointer_pos_in_points {
                         if let Some(button) = crate::translate::translate_mouse_button(*button) {
