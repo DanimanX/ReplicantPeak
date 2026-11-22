@@ -9,7 +9,7 @@ members = [
     "xtask",
 ]
 # Patched dependency copies; built as dependencies, not workspace members.
-exclude = ["vendor/egui-baseview", "vendor/baseview"]
+exclude = ["vendor/egui-baseview", "vendor/baseview", "vendor/nih-plug"]
 
 [workspace.package]
 version = "1.0.8"
@@ -49,3 +49,10 @@ egui-baseview = { path = "vendor/egui-baseview" }
 # fixes are marked "ReplicantPeak patch" in its sources.
 [patch."https://github.com/RustAudio/baseview.git"]
 baseview = { path = "vendor/baseview" }
+
+# nih_plug at the rev that was already pinned (de421011f41a6d10fc8c7a6084e4f4dee0143683),
+# vendored for fixes in the standalone's cpal backend; local fixes are marked
+# "ReplicantPeak patch" in its sources. nih_plug_egui (still from git) resolves
+# its nih_plug dependency to this copy as well.
+[patch."https://github.com/robbert-vdh/nih-plug.git"]
+nih_plug = { path = "vendor/nih-plug" }
