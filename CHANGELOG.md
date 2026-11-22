@@ -3,6 +3,14 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Windows: text fields accepted no keyboard input** ([#6](https://github.com/DanimanX/ReplicantPeak/issues/6)). The editor is a child window, and clicking it did not give it keyboard focus, so every key went to the parent window and was dropped. This made the firmware path field and the "IMPORT .SYX" path field unusable. The editor now takes keyboard focus when it is clicked (patch in `vendor/egui-baseview/src/window.rs`).
+- **Drag & drop of `.syx` files never worked** ([#5](https://github.com/DanimanX/ReplicantPeak/issues/5)). Two bugs on Windows: egui-baseview ignored baseview's drag events and refused every drop, so the panel never saw a dropped file. In the standalone, baseview's message loop only retrieved messages for its own window, so Explorer's COM call into the drop target was never serviced and Explorer hung while dragging. Both are fixed in the vendored copies (`vendor/egui-baseview`, `vendor/baseview`). Dropping the firmware onto the gate and single-patch `.syx` files onto the panel now works on Windows (Linux: baseview's X11 backend has no drag & drop support yet).
+- **Windows standalone: no audio, or a crash, with the default settings** ([#8](https://github.com/DanimanX/ReplicantPeak/issues/8)). The standalone always asked for 48 kHz, but WASAPI in shared mode only accepts the rate the output device is currently set to, so it fell back to the silent dummy backend. It now uses the output device's current rate unless `--sample-rate` is given (`crates/peak-plugin/src/standalone.rs`). When the device rate did match, NIH-plug's audio callback panicked as soon as WASAPI delivered more frames than `--period-size`, which also kept the process alive after the window was closed. Oversized buffers are now split into chunks, and all queued MIDI events are taken per buffer instead of one (patch in `vendor/nih-plug/src/wrapper/standalone/backend/cpal.rs`).
+
 ## [1.0.8] — 2026-10-24
 
 ### Added

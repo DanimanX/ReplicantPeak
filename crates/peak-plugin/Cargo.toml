@@ -19,6 +19,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 crossbeam = "0.8"
 
+# Standalone only: read the output device's current sample rate on Windows
+# (see src/standalone.rs). Same version as NIH-plug's own cpal dependency.
+[target.'cfg(windows)'.dependencies]
+cpal = "0.15"
+
 [dependencies.nih_plug]
 git = "https://github.com/robbert-vdh/nih-plug.git"
 rev = "de421011f41a6d10fc8c7a6084e4f4dee0143683"

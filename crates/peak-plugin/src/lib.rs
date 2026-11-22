@@ -11,6 +11,7 @@
 #![allow(semicolon_in_expressions_from_non_local_macros)]
 
 mod params;
+pub mod standalone;
 
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
