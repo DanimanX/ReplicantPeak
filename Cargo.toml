@@ -9,7 +9,7 @@ members = [
     "xtask",
 ]
 # Patched dependency copies; built as dependencies, not workspace members.
-exclude = ["vendor/egui-baseview"]
+exclude = ["vendor/egui-baseview", "vendor/baseview"]
 
 [workspace.package]
 version = "1.0.8"
@@ -42,3 +42,10 @@ opt-level = 2
 # marked "ReplicantPeak patch" in its sources.
 [patch."https://github.com/BillyDM/egui-baseview.git"]
 egui-baseview = { path = "vendor/egui-baseview" }
+
+# nih_plug (standalone window, rev 579130e) and egui-baseview (rev 9a0b42c)
+# pin two baseview revs from the same repo. Both now resolve to one vendored
+# copy of the newer rev (9a0b42c09d712777b2edb4c5e0cb6baf21e988f0); local
+# fixes are marked "ReplicantPeak patch" in its sources.
+[patch."https://github.com/RustAudio/baseview.git"]
+baseview = { path = "vendor/baseview" }
