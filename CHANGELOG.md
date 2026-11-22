@@ -8,6 +8,7 @@ versioning follows [SemVer](https://semver.org/).
 ### Fixed
 
 - **Windows: text fields accepted no keyboard input** ([#6](https://github.com/DanimanX/ReplicantPeak/issues/6)). The editor is a child window, and clicking it did not give it keyboard focus, so every key went to the parent window and was dropped. This made the firmware path field and the "IMPORT .SYX" path field unusable. The editor now takes keyboard focus when it is clicked (patch in `vendor/egui-baseview/src/window.rs`).
+- **Drag & drop of `.syx` files never worked** ([#5](https://github.com/DanimanX/ReplicantPeak/issues/5)). Two bugs on Windows: egui-baseview ignored baseview's drag events and refused every drop, so the panel never saw a dropped file. In the standalone, baseview's message loop only retrieved messages for its own window, so Explorer's COM call into the drop target was never serviced and Explorer hung while dragging. Both are fixed in the vendored copies (`vendor/egui-baseview`, `vendor/baseview`). Dropping the firmware onto the gate and single-patch `.syx` files onto the panel now works on Windows (Linux: baseview's X11 backend has no drag & drop support yet).
 
 ## [1.0.8] — 2026-10-24
 

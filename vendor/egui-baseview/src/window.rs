@@ -413,6 +413,55 @@ where
         let _ = window;
 
         match &event {
+            // ReplicantPeak patch: file drag & drop.
+            //
+            // baseview reports OS drags as mouse events and only lets a drop
+            // through when the handler answers `AcceptDrop`. Upstream
+            // egui-baseview ignored these events and answered `Captured`, so
+            // every drop was refused and `RawInput::dropped_files` stayed
+            // empty. Translate them into egui's hovered/dropped file lists.
+            baseview::Event::Mouse(
+                baseview::MouseEvent::DragEntered { data, .. }
+                | baseview::MouseEvent::DragMoved { data, .. },
+            ) => {
+                return match data {
+                    baseview::DropData::Files(paths) => {
+                        self.egui_input.hovered_files = paths
+                            .iter()
+                            .map(|path| egui::HoveredFile {
+                                path: Some(path.clone()),
+                                mime: String::new(),
+                            })
+                            .collect();
+                        EventStatus::AcceptDrop(baseview::DropEffect::Copy)
+                    }
+                    baseview::DropData::None => EventStatus::Ignored,
+                };
+            }
+            baseview::Event::Mouse(baseview::MouseEvent::DragLeft) => {
+                self.egui_input.hovered_files.clear();
+                return EventStatus::Captured;
+            }
+            baseview::Event::Mouse(baseview::MouseEvent::DragDropped { data, .. }) => {
+                self.egui_input.hovered_files.clear();
+                return match data {
+                    baseview::DropData::Files(paths) => {
+                        self.egui_input
+                            .dropped_files
+                            .extend(paths.iter().map(|path| egui::DroppedFile {
+                                path: Some(path.clone()),
+                                name: path
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().into_owned())
+                                    .unwrap_or_default(),
+                                ..Default::default()
+                            }));
+                        self.repaint_after = Some(Instant::now());
+                        EventStatus::AcceptDrop(baseview::DropEffect::Copy)
+                    }
+                    baseview::DropData::None => EventStatus::Ignored,
+                };
+            }
             baseview::Event::Mouse(event) => match event {
                 baseview::MouseEvent::CursorMoved {
                     position,
