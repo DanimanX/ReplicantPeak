@@ -3328,6 +3328,7 @@ name = "peak-plugin"
 version = "1.0.8"
 dependencies = [
  "clap-sys 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "cpal",
  "crossbeam",
  "libloading 0.8.9",
  "nih_plug",

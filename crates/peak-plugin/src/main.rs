@@ -8,5 +8,5 @@ use nih_plug::prelude::*;
 use peak_plugin::ReplicantPeak;
 
 fn main() {
-    nih_export_standalone::<ReplicantPeak>();
+    nih_export_standalone_with_args::<ReplicantPeak, _>(peak_plugin::standalone::args());
 }
